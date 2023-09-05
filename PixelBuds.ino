@@ -1,5 +1,3 @@
-
-
 #include <FastLED.h>
 #include <RotaryEncoder.h>
 #include <Adafruit_MPU6050.h>
@@ -100,20 +98,43 @@ void fadeBoard(int amount) {
 std::vector<std::vector<int>> availableIndicies;
 
 void initAvailableIndicies(){
+  availableIndicies.clear();
   for (int x = 0; x < 32;x++){
     for (int y=0;y<8;y++){
       std::vector<int> newIndex;
       newIndex.push_back(x);
       newIndex.push_back(y);
       availableIndicies.push_back(newIndex);
-
-
     }
-
-
   }
+}
+void removeAvailableIndex(int x, int y){
+    for (std::vector<std::vector<int>>::iterator it = availableIndicies.begin();it<availableIndicies.end();it++){
+      std::vector<int> index = *it;
+        if(x==index[0] && y == index[1]){
+          availableIndicies.erase(it);
+        }
+      }
 
 
+}
+
+void addAvailableIndex(int x, int y){
+    std::vector<int> newIndex;
+    newIndex.push_back(x);
+    newIndex.push_back(y);
+    availableIndicies.push_back(newIndex);
+}
+
+std::vector<int> getRandomAvailableIndex(){
+    std::vector<int> newRandomIndex;
+    int randIndex = random(availableIndicies.size());
+    newRandomIndex.push_back(availableIndicies[randIndex][0]);
+    newRandomIndex.push_back(availableIndicies[randIndex][1]);
+    std::vector<std::vector<int>>::iterator it = availableIndicies.begin() + randIndex;
+    availableIndicies.erase(it);
+
+    return newRandomIndex;
 }
 
 class pixel {
@@ -185,11 +206,13 @@ void pixel::randomize() {
 
 
     //  int rand2 = random(2);
-    int randIndex = random(availableIndicies.size());
-    xPos = availableIndicies[randIndex][0];
-    yPos = availableIndicies[randIndex][1];
-    std::vector<std::vector<int>>::iterator it = availableIndicies.begin() + randIndex;
-    availableIndicies.erase(it);
+
+
+    std::vector<int> newRandomIndex = getRandomAvailableIndex();
+
+    xPos = newRandomIndex[0];
+    yPos = newRandomIndex[1];
+
   } else {
     bool positionSet=false;
     for(int x =random(32);x<32;x++){
@@ -445,10 +468,11 @@ void pixel::computeCycle() {
     int minDistance = 256;
     int tX = this->xPos;
     int tY = this->yPos;
-    std::vector<int> newIndex;
-    newIndex.push_back(tX);
-    newIndex.push_back(tY);
-    availableIndicies.push_back(newIndex);
+
+    // Add available Index
+    addAvailableIndex(tX,tY);
+
+
 
     for (pixel px : pixels) {
       if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() > this->minX && px.getY() > this->minY) {
@@ -514,12 +538,9 @@ void pixel::computeCycle() {
 
     neighbors = this->getNeighbors();
 
-    for (std::vector<std::vector<int>>::iterator it = availableIndicies.begin();it<availableIndicies.end();it++){
-      std::vector<int> index = *it;
-        if(this->xPos==index[0] && this->yPos == index[1]){
-          availableIndicies.erase(it);
-        }
-      }
+    // Remove available index after moving pixel
+    removeAvailableIndex(this->xPos, this->yPos);
+
 
     //  this->age(false);
   }
