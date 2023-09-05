@@ -213,21 +213,11 @@ void pixel::randomize() {
         }
         if(positionSet) break;  
       }
-//    this->xPos = random(this->minX, this->maxX);
-//    this->yPos = random(this->minY, this->maxY);
 
   }
 
 
-  //  for (int x = 0; x < 32; x++ ) {
-  //    for (int y = 0; y < 8; y++) {
 
-
-  //
-  //    }
-  //
-  //
-  //  }
   int rand3 = random(3);
   this->lifeTime = random(30, 200);
   //  this->half = rand2;/
@@ -248,11 +238,8 @@ void pixel::randomize() {
         Serial.println("Uncaught Error");
       }
   }
-  //          this->color=nColor;
   this->turnsLived = 0;
-  //  this->shareTo = random(0,2);/
-  //  neighbors.clear();
-  //  this->neighbors = std::vector<pixel>();
+
 
 }
 void pixel::age(bool fade, std::vector<pixel> & neighbor) {
@@ -260,22 +247,7 @@ void pixel::age(bool fade, std::vector<pixel> & neighbor) {
   this->turnsLived += 1;
   this->shareTo = !(this->turnsLived > this->lifeTime);
 
-  //      if (!this->shareTo) this->color.fadeLightBy(65);
-  //    if (fade) {
-  //      if (half){
-  //      for (pixel px: neighbor){
-  //        CRGBArray<2> newColor = splitColors(this->color,px.color,1,neighbor.size()+1);
-  //        px.color=newColor[1];
-  ////        for (int i=0;i<3;i++){
-  ////          newColor[0][i]=newColor[0][i]/2;
-  ////
-  ////          }
-  //        this->color=newColor[0];
-  //
-  //        }
-  //
-  //
-  //      }}else{}
+
   if (this->color[0] < 5 && this->color[1] < 5 && this->color[2] < 5) {
     // Serial.print("AvailableIndicies Size: ");
     // Serial.println(availableIndicies.size());
@@ -302,26 +274,9 @@ std::vector<pixel> pixel::getNeighbors() {
   for (pixel px : pixels) {
     if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() > this->minX && px.getY() > this->minY) {
       if ((abs(px.getX() - this->xPos) == 1) && this->yPos == px.getY() || (abs(px.getY() - this->yPos) == 1) && this->xPos == px.getX()) {
-        //          bool inNieghbors = false;
-        //          for (pixel nPx: this->neighbors){
-        //            if(nPx.getX()==px.getX() && nPx.getY()==px.getY()){
-        //              inNieghbors=true;
-        //
-        //              }
-        //
-        //
-        //            }
-        //          if (!inNieghbors){
+
         output.push_back(px);
-        //            }
 
-        //            foundNeighbor=true;
-
-        //          Serial.print(abs(px.getX()-this->xPos));
-        //          Serial.print(" ");
-        //          Serial.print(abs(px.getY()-this->yPos));
-        //          Serial.print(" ");
-        //          Serial.println(foundNeighbor);
       }
     }
 
@@ -389,7 +344,6 @@ CRGBArray<2> pixel::splitColors(CRGB A, CRGB B, int denom, int numer) {
 //}
 
 void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
-  //  CRGBArray<2> colorSplit = splitColors(px.getColor(), this->color, 1, neighbors.size());
 
   int tempCalc[3] = {0, 0, 0};
   CRGB output(0, 0, 0);
@@ -535,23 +489,7 @@ void pixel::computeCycle() {
       else if (tY > this->yPos) {
         this->yPos = (this->yPos) + 1;
       }
-      //     neighbors = this->getNeighbors();
-      //     if (neighbors.size()!=0){
-      //         if(!this->half){
-      //          CRGB output=splitColors(this->color, neighbors);
-      //          this->color =output;
-      //        }else{
-      //        //      Best bang for buck funciton, nice visuals, good diffusion, low effort
-      //        for (pixel px:neighbors){
-      //          CRGBArray<2> colorSplit= splitColors(px.getColor(),this->color, 1,2);
-      //
-      //          CRGB average= colorSplit[0];
-      //          px.setColor(average);
-      //          this->color=average;
-      //
-      //        }
-      //        }
-      //     }
+
     } else {
       int randomDir = random(2);
       switch (randomDir) {
