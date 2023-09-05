@@ -274,12 +274,9 @@ void pixel::age(bool fade, std::vector<pixel> & neighbor) {
   if (this->color[0] < 5 && this->color[1] < 5 && this->color[2] < 5) {
     // Serial.print("AvailableIndicies Size: ");
     // Serial.println(availableIndicies.size());
-    std::vector<int> newAvailableIndex;
 
-    newAvailableIndex.push_back(this->xPos);
-    newAvailableIndex.push_back(this->yPos);
-    // availableIndicies.reserve(newAvailableIndex.size()*2);
-    availableIndicies.push_back(newAvailableIndex);
+    // add index to availableIndicies when dead
+    addAvailableIndex(this->xPos,this->yPos);
     this->randomize();
     //        delete pixels.back();
 
@@ -366,6 +363,7 @@ CRGBArray<2> pixel::splitColors(CRGB A, CRGB B, int denom, int numer) {
 //  return pixel[0];
 //}
 
+// Takes an average from neighboring pixels and splits it to pixels with shareTo set to true
 void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
 
   int tempCalc[3] = {0, 0, 0};
@@ -439,6 +437,9 @@ void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
 //
 //
 //}
+
+// If half is set to false for the pixel, simply take the average of the pixel and each neighbor and assign it to both iteratively
+// Otherwise take the average of all neighboring pixels and assign all at once
 void pixel::averageColors(std::vector<pixel> & neighbors) {
   //  if (neighbors.size()==0) return;
   if (this->half) {
@@ -464,6 +465,7 @@ void pixel::computeCycle() {
   std::vector<pixel> neighbors = this->getNeighbors();
   int neighborSize = neighbors.size() + 1;
 
+  // If there are no neighbors, find closest pixel and move towards it or move a random step in the y axis
   if (neighbors.size() == 0) {
     int minDistance = 256;
     int tX = this->xPos;
@@ -472,8 +474,7 @@ void pixel::computeCycle() {
     // Add available Index
     addAvailableIndex(tX,tY);
 
-
-
+    // Determine closest pixel and set a target for a spot around that pixel
     for (pixel px : pixels) {
       if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() > this->minX && px.getY() > this->minY) {
         if (px.getX() == this->xPos && px.getY() != this->yPos) {
@@ -499,6 +500,7 @@ void pixel::computeCycle() {
     }
 
     //     delay(10);
+    // If target pixel is found, move towards it
     if (minDistance != 256) {
       //     LEDs[getIndex(this->xPos,this->yPos)] = CRGB(0,0,0);
       if (tX < this->xPos) {
@@ -513,7 +515,7 @@ void pixel::computeCycle() {
       else if (tY > this->yPos) {
         this->yPos = (this->yPos) + 1;
       }
-
+    // If target pixel is not found, move a random step accross the y axis
     } else {
       int randomDir = random(2);
       switch (randomDir) {
@@ -535,7 +537,7 @@ void pixel::computeCycle() {
 
     }
 
-
+    // Store neighbor pixels
     neighbors = this->getNeighbors();
 
     // Remove available index after moving pixel
@@ -544,8 +546,11 @@ void pixel::computeCycle() {
 
     //  this->age(false);
   }
+
+  // Age this pixel if it has neighbors
   this->age(!(neighbors.size() == 0), neighbors);
 
+  // Average colors with neighbors if it has any
   if (neighbors.size() != 0) {
     this->averageColors(neighbors);
   }
