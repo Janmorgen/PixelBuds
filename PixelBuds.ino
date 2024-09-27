@@ -22,7 +22,7 @@
 #endif
 #define MIC_PIN A0
 
-RotaryEncoder *encoder = nullptr;
+
 
 // Setup a RotaryEncoder with 4 steps per latch for the 2 signal input pins:
 // RotaryEncoder encoder(PIN_IN1, PIN_IN2, RotaryEncoder::LatchMode::FOUR3);
@@ -37,6 +37,11 @@ RotaryEncoder *encoder = nullptr;
 #define XMAX 31;
 #define YMAX 7;
 CRGBArray<RGB_LED_NUM> LEDs;
+
+#define ROTARY_SW 2
+#define ROTARY_CK 15
+#define ROTARY_DT 4
+
 
 //byte c//unt[32][8] = {{'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '0', '1', '1', '1', '1', '0', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '1', '1', '0', '0', '1', '1', '0'}, {'0', '1', '1', '0', '0', '1', '1', '0'}, {'0', '1', '1', '0', '0', '1', '1', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '1', '1', '1', '1', '1', '0', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '0', '0', '0', '0', '1', '1', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '1', '1', '1', '1', '1', '0', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '0', '1', '1', '1', '0', '0', '0'}, {'0', '0', '0', '1', '1', '1', '0', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '1', '1', '0', '0', '0', '0', '0'}, {'0', '1', '1', '0', '0', '0', '0', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '1', '1', '1', '1', '1', '1', '0'}, {'0', '1', '1', '0', '0', '0', '0', '0'}, {'0', '1', '1', '0', '0', '0', '0', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}, {'0', '0', '0', '0', '0', '0', '0', '0'}};// define 3 byte for the random color
 byte  a, b, c;
@@ -147,7 +152,8 @@ class pixel {
     void setX(int x);
     void setY(int y);
     void setColor(CRGB color);
-    void computeCycle();
+    void move(std::vector<pixel> & neighbors);
+    void computeCycle(std::vector<pixel> & neighbors);
     void writePixel();
     void randomize();
     void age(bool fade, std::vector<pixel> & neighbors);
@@ -242,7 +248,7 @@ void pixel::randomize() {
 
 
   int rand3 = random(3);
-  this->lifeTime = random(30, 200);
+  this->lifeTime = random(30, 100);
   //  this->half = rand2;/
   switch (rand3) {
     case (0): {
@@ -365,7 +371,7 @@ CRGBArray<2> pixel::splitColors(CRGB A, CRGB B, int denom, int numer) {
 
 // Takes an average from neighboring pixels and splits it to pixels with shareTo set to true
 void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
-
+  bool overflowFlags[3] = {false,false,false};
   int tempCalc[3] = {0, 0, 0};
   CRGB output(0, 0, 0);
   int shareToSize = 0;
@@ -386,6 +392,9 @@ void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
 
       int outputVal = tempCalc[i] / shareToSize;
 
+ 
+     
+
       if (outputVal > 255) {
         //        Serial.print("OutputVal Greater than 255! on: ");/
         //        Serial.println(i);/
@@ -396,11 +405,21 @@ void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
 
     }
     for (pixel neighbor : neighbors) {
-      if (neighbor.shareTo)
-        neighbor.color = output;
+      if (neighbor.shareTo){
+        
+
+            neighbor.color=output;
+             
+          
+      }
       //      else neighbor.color.fadeLightBy(70);
     }
-    if (this->shareTo) this->color = output;
+    if (this->shareTo){
+
+            this->color = output;
+            
+        }
+     
     else {
       this->color = CRGB(0, 0, 0);
     }
@@ -459,14 +478,7 @@ void pixel::averageColors(std::vector<pixel> & neighbors) {
   }
 }
 
-
-void pixel::computeCycle() {
-
-  std::vector<pixel> neighbors = this->getNeighbors();
-  int neighborSize = neighbors.size() + 1;
-
-  // If there are no neighbors, find closest pixel and move towards it or move a random step in the y axis
-  if (neighbors.size() == 0) {
+void pixel::move(std::vector<pixel> & neighbors) {
     int minDistance = 256;
     int tX = this->xPos;
     int tY = this->yPos;
@@ -537,18 +549,13 @@ void pixel::computeCycle() {
 
     }
 
-    // Store neighbor pixels
-    neighbors = this->getNeighbors();
 
-    // Remove available index after moving pixel
     removeAvailableIndex(this->xPos, this->yPos);
+}
+void pixel::computeCycle(std::vector<pixel> & neighbors) {
 
 
-    //  this->age(false);
-  }
-
-  // Age this pixel if it has neighbors
-  this->age(!(neighbors.size() == 0), neighbors);
+  
 
   // Average colors with neighbors if it has any
   if (neighbors.size() != 0) {
@@ -561,8 +568,149 @@ void pixel::writePixel() {
 
 }
 
+RotaryEncoder *encoder = nullptr;
 
+boolean encoderPress(){
+  while(digitalRead(ROTARY_SW)==LOW){
+    delay(100);
+    if(digitalRead(ROTARY_SW) == HIGH){
+      return true;
+      }
+    }
+    return false;
+  }
+void readEncoder(){
+  encoder->tick();
 
+//  rotPs = encoder.getPosition();
+
+  }
+  
+int moveSpeed = 1;
+int colorSpeed= 1;
+int ageValue  = 30;
+int brightness= 100;
+void changePixelCount() {
+  Serial.println("changePixelCount");
+
+    int pixelSize=pixels.size();
+    
+    while (true){
+      readEncoder();
+      int direction = (int) encoder->getDirection();
+      pixelSize += direction;
+      if (direction == -1 && pixelSize > 1) {
+        addAvailableIndex(pixels[pixels.size()-1].getX(),pixels[pixels.size()-1].getY());
+        pixels[pixels.size()-1].color = CRGB (0,0,0);
+        pixels[pixels.size()-1].writePixel();
+        pixels.pop_back();
+        
+        }
+      else if (direction == 1 && pixelSize < 256){
+          pixel newPixel=pixel();
+
+          newPixel.half = true;
+          newPixel.randomize();
+
+      //  newPixel.getNeighbors();
+          pixels.push_back(newPixel);
+          newPixel.writePixel();
+        }
+      FastLED.show();
+      Serial.println(pixelSize);
+      if (pixelSize < 1) pixelSize=1;
+      if (pixelSize > 256) pixelSize=256;
+      if (encoderPress()) break;
+      }
+//     for (int a = 0; a < pixelSize; a++) {
+//      pixel newPixel=pixel();
+//
+//      newPixel.half = true;
+//      newPixel.randomize();
+//
+//      //  newPixel.getNeighbors();
+//      pixels.push_back(newPixel);
+//      
+//      }
+     
+    
+  }
+
+void changeMoveSpeed(){
+  Serial.println("changeMoveSpeed");
+  while (true){
+    readEncoder();
+    int direction = (int) encoder->getDirection();
+    moveSpeed+=direction;
+    if (moveSpeed < 1) moveSpeed = 1;
+    Serial.println(moveSpeed);
+    if (encoderPress()) break;  
+    }
+  }
+void changeColorSpeed(){
+  Serial.println("changeColorSpeed");
+  while (true){
+    readEncoder();
+    int direction = (int) encoder->getDirection();
+    colorSpeed+=direction;
+    if (colorSpeed < 1) colorSpeed = 1;
+    Serial.println(colorSpeed);
+    if (encoderPress()) break;  
+    }
+  }
+void changeBrightness(){
+  Serial.println("changeBrightness");
+  while (true){
+    readEncoder();
+    int direction = (int) encoder->getDirection();
+    brightness+=direction;
+    if (brightness < 1) brightness = 1;
+    if (brightness > 255) brightness = 255;
+    Serial.println(brightness);
+    if (encoderPress()) break;  
+    }
+  }
+  
+void handleModes(){
+  int setting=0;
+  FastLED.clear();
+  while (true){
+    readEncoder();
+    int direction = (int) encoder->getDirection();
+    setting += direction;
+    
+    if (setting < 0) setting=0;
+    if (setting > 4) setting=4;
+    Serial.println(setting);
+    for (int px=-1; px < 4; px++){
+      if (px < setting){
+        LEDs[px] = CRGB(255,0,0);
+        }else{
+        LEDs[px] = CRGB(0,0,0);  
+          }
+      }
+      FastLED.show();
+    if (encoderPress()) break;
+    }
+  if (setting == 0){
+    changePixelCount();
+    }
+  else if (setting == 1){
+    changeMoveSpeed();
+    }
+  else if (setting == 2){
+    changeColorSpeed();
+    }
+  else if (setting == 3){
+    changeBrightness();
+    }
+  
+  
+  }
+void checkPosition()
+{
+  encoder->tick(); // just call tick() to check the state.
+}
 
 
 
@@ -576,14 +724,18 @@ void setup() {
   FastLED.setBrightness(BRIGHTNESS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
   FastLED.clear();
-  FastLED.show();
-  //  pinMode(4,INPUT);
+//  FastLED.show();/
+    pinMode(ROTARY_SW,INPUT);
+    encoder = new RotaryEncoder(ROTARY_CK, ROTARY_DT, RotaryEncoder::LatchMode::TWO03);
   //  pinMode(MIC_PIN,INPUT);
   randomSeed(analogRead(0));
   initAvailableIndicies();
-
-  for (int a = 0; a < 200; a++) {
-    //    Serial.println(a);
+      attachInterrupt(digitalPinToInterrupt(ROTARY_CK), checkPosition, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ROTARY_DT), checkPosition, CHANGE);
+  for (int a = 0; a < 2; a++) {
+//    LEDs[a]= CRGB(255,180,40);/
+//        Serial.println(a);
+      
     pixel newPixel = pixel();
 
     //    if (random(2) == 1) {
@@ -606,6 +758,7 @@ void setup() {
     pixels.push_back(newPixel);
 
   }
+  FastLED.show();
   //  for (int x = 0; x < 32; x++) {
   //    for (int y = 0; y < 8; y++) {
   //      if (cunt[x][y] == '1') {
@@ -637,23 +790,50 @@ int y = 0;
 int noise = 0;
 int maxNoise = 0;
 CRGB color = CRGB(0, 0, 0);
+int frameCount=1;
 
 
 void loop() {
+//  while(true){delay(5000);}/
   //  FastLED.clear();/
-  fadeBoard(150);
+  fadeBoard(56);
+  FastLED.setBrightness(brightness);
+//  Serial.println(digitalRead(ROTARY_SW));/
+  randomSeed(analogRead(0));
+  if(encoderPress()){
+//    handleEncoder(0);/
+     handleModes();
+    }
 
   for (int i = 0; i < pixels.size(); i++) {
-    pixels[i].computeCycle();
-    //      delay(90);
-    pixels[i].writePixel();
-    //      FastLED.show();
-  }
+    std::vector<pixel> neighbors = pixels[i].getNeighbors();
 
+if(neighbors.size() == 0) {    
+    if (frameCount%moveSpeed == 0){
+      
+        pixels[i].move(neighbors);  
+      
+    }
+}else {
+  pixels[i].age(!(neighbors.size() == 0), neighbors);
+  }
+    if (frameCount%colorSpeed == 0){
+      pixels[i].computeCycle(neighbors);
+      }
+    
+
+    pixels[i].writePixel();
+    
+  }
+  frameCount++;
+ 
+  
+  FastLED.show();
+  
   //  pixel newPixel = pixel();
 
 
-  FastLED.show();
+  
   //  pixel nPixel=pixel();
   //
   //  if (random(2)==1){
