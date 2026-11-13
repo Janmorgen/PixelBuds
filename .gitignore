@@ -2,3 +2,4 @@ ArduinoOutput
 alphabet.h
 build
 c_cpp_properties.json
+secrets.h

@@ -1,13 +1,14 @@
 #include <FastLED.h>
 #include <RotaryEncoder.h>
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
+// #include <Adafruit_MPU6050.h>
+// #include <Adafruit_Sensor.h>
 #include <Wire.h>
 #include <ArxContainer.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <numeric>
-#include "alphabet.h"
+// #include "alphabet.h"
+#include "network.h"
 
 #if defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO_EVERY)
 // Example for Arduino UNO with input signals on pin 2 and 3
@@ -38,8 +39,9 @@
 #define YMAX 7;
 CRGBArray<RGB_LED_NUM> LEDs;
 
-#define ROTARY_SW 2
+#define ROTARY_SW 27
 #define ROTARY_CK 15
+#define ONBOARD_LED_PIN 2   // dev board's blue LED, held off
 #define ROTARY_DT 4
 
 
@@ -152,18 +154,18 @@ class pixel {
     void setX(int x);
     void setY(int y);
     void setColor(CRGB color);
-    void move(std::vector<pixel> & neighbors);
-    void computeCycle(std::vector<pixel> & neighbors);
+    void move();
+    void computeCycle(std::vector<pixel*> & neighbors);
     void writePixel();
     void randomize();
-    void age(bool fade, std::vector<pixel> & neighbors);
-    std::vector<pixel> getNeighbors();
+    bool age(bool inContact);
+    std::vector<pixel*> getNeighbors();
     std::vector<pixel> getNeighbors(std::vector<pixel> prevNeighbors);
     CRGBArray<2> splitColors(CRGB A, CRGB B, int denom, int numer);
     bool operator==( pixel& A);
     bool operator!=( pixel& A);
-    void splitColors(CRGB A, std::vector<pixel>& neighbors);
-    void averageColors(std::vector<pixel> & neighbors);
+    void splitColors(CRGB A, std::vector<pixel*>& neighbors);
+    void averageColors(std::vector<pixel*> & neighbors);
 
 
     CRGB color = (0, 0, 0);
@@ -268,40 +270,31 @@ void pixel::randomize() {
       }
   }
   this->turnsLived = 0;
+  this->shareTo = true;
 
 
 }
-void pixel::age(bool fade, std::vector<pixel> & neighbor) {
-
-  this->turnsLived += 1;
-  this->shareTo = !(this->turnsLived > this->lifeTime);
-
-
+// Respawns a dark pixel and returns true; otherwise ages it while it touches another pixel.
+bool pixel::age(bool inContact) {
   if (this->color[0] < 5 && this->color[1] < 5 && this->color[2] < 5) {
-    // Serial.print("AvailableIndicies Size: ");
-    // Serial.println(availableIndicies.size());
-
-    // add index to availableIndicies when dead
     addAvailableIndex(this->xPos,this->yPos);
     this->randomize();
-    //        delete pixels.back();
-
-
-    //        pixels.push_back(newPixel);
+    return true;
   }
 
-
-
+  if (inContact) {
+    this->turnsLived += 1;
+    this->shareTo = !(this->turnsLived > this->lifeTime);
+  }
+  return false;
 }
-std::vector<pixel> pixel::getNeighbors() {
-  std::vector<pixel> output;
-  //    this->neighbors.clear();
-  //    this->neighbors.swap(newNeighbors);
-  for (pixel px : pixels) {
-    if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() > this->minX && px.getY() > this->minY) {
-      if ((abs(px.getX() - this->xPos) == 1) && this->yPos == px.getY() || (abs(px.getY() - this->yPos) == 1) && this->xPos == px.getX()) {
+std::vector<pixel*> pixel::getNeighbors() {
+  std::vector<pixel*> output;
+  for (pixel& px : pixels) {
+    if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() >= this->minX && px.getY() >= this->minY) {
+      if (((abs(px.getX() - this->xPos) == 1) && this->yPos == px.getY()) || ((abs(px.getY() - this->yPos) == 1) && this->xPos == px.getX())) {
 
-        output.push_back(px);
+        output.push_back(&px);
 
       }
     }
@@ -369,63 +362,24 @@ CRGBArray<2> pixel::splitColors(CRGB A, CRGB B, int denom, int numer) {
 //  return pixel[0];
 //}
 
-// Takes an average from neighboring pixels and splits it to pixels with shareTo set to true
-void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
-  bool overflowFlags[3] = {false,false,false};
-  int tempCalc[3] = {0, 0, 0};
+// Sets this pixel to the pooled colour of itself and its neighbours, divided among those with shareTo set.
+void pixel::splitColors(CRGB A, std::vector<pixel*>& neighbors) {
+  int tempCalc[3] = {A[0], A[1], A[2]};
+  int shareToSize = this->shareTo ? 1 : 0;
+
+  for (pixel* neighbor : neighbors) {
+    for (int i = 0; i < 3; i++) {
+      tempCalc[i] += neighbor->color[i];
+    }
+    if (neighbor->shareTo) shareToSize += 1;
+  }
+  if (shareToSize == 0) return;
+
   CRGB output(0, 0, 0);
-  int shareToSize = 0;
-
-  for (pixel neighbor : neighbors) {
-    for (int i = 0; i < 3; i++) {
-      tempCalc[i] += neighbor.color[i];
-    }
-    if (neighbor.shareTo) shareToSize += 1;
-
-
+  for (int i = 0; i < 3; i++) {
+    output[i] = min(tempCalc[i] / shareToSize, 255);
   }
-  if (shareToSize != 0) {
-    if (this->shareTo) shareToSize += 1;
-
-    for (int i = 0; i < 3; i++) {
-      tempCalc[i] += A[i];
-
-      int outputVal = tempCalc[i] / shareToSize;
-
- 
-     
-
-      if (outputVal > 255) {
-        //        Serial.print("OutputVal Greater than 255! on: ");/
-        //        Serial.println(i);/
-        outputVal = 128;
-      }
-
-      output[i] = outputVal;
-
-    }
-    for (pixel neighbor : neighbors) {
-      if (neighbor.shareTo){
-        
-
-            neighbor.color=output;
-             
-          
-      }
-      //      else neighbor.color.fadeLightBy(70);
-    }
-    if (this->shareTo){
-
-            this->color = output;
-            
-        }
-     
-    else {
-      this->color = CRGB(0, 0, 0);
-    }
-  } else {
-    //    this->color.fadeLightBy(100);
-  }
+  this->color = this->shareTo ? output : CRGB(0, 0, 0);
 }
 
 //void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
@@ -459,26 +413,26 @@ void pixel::splitColors(CRGB A, std::vector<pixel>& neighbors) {
 
 // If half is set to false for the pixel, simply take the average of the pixel and each neighbor and assign it to both iteratively
 // Otherwise take the average of all neighboring pixels and assign all at once
-void pixel::averageColors(std::vector<pixel> & neighbors) {
+void pixel::averageColors(std::vector<pixel*> & neighbors) {
   //  if (neighbors.size()==0) return;
   if (this->half) {
     splitColors(this->color, neighbors);
     //    this->color =output;
   } else {
     //      Best bang for buck funciton, nice visuals, good diffusion, low effort
-    for (pixel px : neighbors) {
+    for (pixel* px : neighbors) {
 
-      CRGBArray<2> colorSplit = splitColors(px.getColor(), this->color, 1, 2);
+      CRGBArray<2> colorSplit = splitColors(px->getColor(), this->color, 1, 2);
 
       CRGB average = colorSplit[0];
-      px.setColor(average);
+      px->setColor(average);
       this->color = average;
 
     }
   }
 }
 
-void pixel::move(std::vector<pixel> & neighbors) {
+void pixel::move() {
     int minDistance = 256;
     int tX = this->xPos;
     int tY = this->yPos;
@@ -487,8 +441,8 @@ void pixel::move(std::vector<pixel> & neighbors) {
     addAvailableIndex(tX,tY);
 
     // Determine closest pixel and set a target for a spot around that pixel
-    for (pixel px : pixels) {
-      if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() > this->minX && px.getY() > this->minY) {
+    for (pixel& px : pixels) {
+      if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() >= this->minX && px.getY() >= this->minY) {
         if (px.getX() == this->xPos && px.getY() != this->yPos) {
           int calcDist = abs(px.getY() - this->yPos);
           if (calcDist < minDistance) {
@@ -527,41 +481,35 @@ void pixel::move(std::vector<pixel> & neighbors) {
       else if (tY > this->yPos) {
         this->yPos = (this->yPos) + 1;
       }
-    // If target pixel is not found, move a random step accross the y axis
+    // If target pixel is not found, move a random step in any direction, bouncing off the edges
     } else {
-      int randomDir = random(2);
-      switch (randomDir) {
-        case (0): {
-            if (this->yPos + 1 < this->maxY) this->yPos += 1;
-            else this->yPos -= 1;
-            break;
-          }
-        case (1): {
-            if (this->yPos - 1 > this->minY) this->yPos -= 1;
-            else this->yPos += 1;
-
-            break;
-          }
-
-
+      switch (random(4)) {
+        case (0):
+          this->xPos += (this->xPos + 1 < this->maxX) ? 1 : -1;
+          break;
+        case (1):
+          this->xPos += (this->xPos - 1 >= this->minX) ? -1 : 1;
+          break;
+        case (2):
+          this->yPos += (this->yPos + 1 < this->maxY) ? 1 : -1;
+          break;
+        default:
+          this->yPos += (this->yPos - 1 >= this->minY) ? -1 : 1;
+          break;
       }
-
-
     }
 
 
     removeAvailableIndex(this->xPos, this->yPos);
 }
-void pixel::computeCycle(std::vector<pixel> & neighbors) {
-
-
-  
-
-  // Average colors with neighbors if it has any
+// Averages colours with any neighbours; an expired pixel then goes dark so it respawns.
+void pixel::computeCycle(std::vector<pixel*> & neighbors) {
   if (neighbors.size() != 0) {
     this->averageColors(neighbors);
   }
-
+  if (!this->shareTo) {
+    this->color = CRGB(0, 0, 0);
+  }
 }
 void pixel::writePixel() {
   LEDs[getIndex(this->xPos, this->yPos)] = this->color;
@@ -725,14 +673,20 @@ void setup() {
   FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
   FastLED.clear();
 //  FastLED.show();/
-    pinMode(ROTARY_SW,INPUT);
+    pinMode(ONBOARD_LED_PIN, OUTPUT);
+    digitalWrite(ONBOARD_LED_PIN, LOW);
+    pinMode(ROTARY_SW,INPUT_PULLUP);
+    networkBegin();
     encoder = new RotaryEncoder(ROTARY_CK, ROTARY_DT, RotaryEncoder::LatchMode::TWO03);
   //  pinMode(MIC_PIN,INPUT);
+#ifndef ESP32
+  // ESP32's random() uses the hardware RNG unless randomSeed() is called.
   randomSeed(analogRead(0));
+#endif
   initAvailableIndicies();
       attachInterrupt(digitalPinToInterrupt(ROTARY_CK), checkPosition, CHANGE);
     attachInterrupt(digitalPinToInterrupt(ROTARY_DT), checkPosition, CHANGE);
-  for (int a = 0; a < 2; a++) {
+  for (int a = 0; a < 30; a++) {
 //    LEDs[a]= CRGB(255,180,40);/
 //        Serial.println(a);
       
@@ -794,36 +748,32 @@ int frameCount=1;
 
 
 void loop() {
+  networkLoop();
 //  while(true){delay(5000);}/
   //  FastLED.clear();/
   fadeBoard(56);
   FastLED.setBrightness(brightness);
 //  Serial.println(digitalRead(ROTARY_SW));/
-  randomSeed(analogRead(0));
-  if(encoderPress()){
-//    handleEncoder(0);/
-     handleModes();
-    }
+//   if(encoderPress()){
+// //    handleEncoder(0);/
+//      handleModes();
+//     }
 
-  for (int i = 0; i < pixels.size(); i++) {
-    std::vector<pixel> neighbors = pixels[i].getNeighbors();
+  for (size_t i = 0; i < pixels.size(); i++) {
+    std::vector<pixel*> neighbors = pixels[i].getNeighbors();
 
-if(neighbors.size() == 0) {    
-    if (frameCount%moveSpeed == 0){
-      
-        pixels[i].move(neighbors);  
-      
+    if (pixels[i].age(!neighbors.empty())) {
+      pixels[i].writePixel();
+      continue;
     }
-}else {
-  pixels[i].age(!(neighbors.size() == 0), neighbors);
-  }
-    if (frameCount%colorSpeed == 0){
+    if (neighbors.empty() && frameCount % moveSpeed == 0) {
+      pixels[i].move();
+    }
+    if (frameCount % colorSpeed == 0) {
       pixels[i].computeCycle(neighbors);
-      }
-    
+    }
 
     pixels[i].writePixel();
-    
   }
   frameCount++;
  

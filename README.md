@@ -10,6 +10,15 @@ I built this to run on a ESP32-WRoom dev board and I added a rotary encoder to c
 
 The code itself contains the pins I used for the LED Matrix and the encoder, but they can be changed to pretty much any other pin
 
+#### Wi-Fi and wireless flashing
+Copy `secrets.h.example` to `secrets.h` (it is gitignored) and fill in your Wi-Fi network, password and an OTA password. The board joins Wi-Fi as `pixelbuds.local`.
+
+The first flash must be over USB, because it sets up the flash partitions that wireless updates need (`sketch.yaml` pins them). After that you can flash over Wi-Fi:
+
+```
+arduino-cli upload -p pixelbuds.local --protocol network --upload-field password=<OTA password> .
+```
+
 
 
 ##### Required Libraries

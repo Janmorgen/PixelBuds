@@ -1,0 +1,3 @@
+# no_fs gives two 2 MB app slots for OTA; the partition table can only change over USB.
+default_fqbn: esp32:esp32:esp32:PartitionScheme=no_fs
+default_port: /dev/ttyUSB0
