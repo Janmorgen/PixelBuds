@@ -156,7 +156,7 @@ class pixel {
     void setColor(CRGB color);
     void move();
     void computeCycle(std::vector<pixel*> & neighbors);
-    void writePixel();
+    void writePixel(int rampFrames = 1);
     void randomize();
     bool age(bool inContact);
     std::vector<pixel*> getNeighbors();
@@ -182,6 +182,7 @@ class pixel {
     bool shareTo = true;
     bool retired = false;
     int spawnIndex = 0;
+    int framesSinceMove = 1000;
     void expire();
 };
 std::vector<pixel> pixels;
@@ -257,6 +258,7 @@ void pixel::randomize() {
   this->color = paletteColors[this->spawnIndex];
   this->turnsLived = 0;
   this->shareTo = true;
+  this->framesSinceMove = 0;
 
 
 }
@@ -422,6 +424,8 @@ void pixel::averageColors(std::vector<pixel*> & neighbors) {
 }
 
 void pixel::move() {
+    int oldX = this->xPos;
+    int oldY = this->yPos;
     int minDistance = 256;
     int tX = this->xPos;
     int tY = this->yPos;
@@ -490,6 +494,7 @@ void pixel::move() {
 
 
     removeAvailableIndex(this->xPos, this->yPos);
+    if (this->xPos != oldX || this->yPos != oldY) this->framesSinceMove = 0;
 }
 // Averages colours with any neighbours; an expired pixel then goes dark so it respawns.
 void pixel::computeCycle(std::vector<pixel*> & neighbors) {
@@ -500,8 +505,15 @@ void pixel::computeCycle(std::vector<pixel*> & neighbors) {
     this->color = CRGB(0, 0, 0);
   }
 }
-void pixel::writePixel() {
-  LEDs[getIndex(this->xPos, this->yPos)] = this->color;
+// Writes the pixel's colour, fading it in over rampFrames after a move or spawn.
+void pixel::writePixel(int rampFrames) {
+  CRGB& led = LEDs[getIndex(this->xPos, this->yPos)];
+  if (rampFrames <= 1 || this->framesSinceMove + 1 >= rampFrames) {
+    led = this->color;
+  } else {
+    led = blend(led, this->color, (uint8_t)(255 * (this->framesSinceMove + 1) / rampFrames));
+  }
+  if (this->framesSinceMove < 1000) this->framesSinceMove++;
 }
 
 RotaryEncoder *encoder = nullptr;
@@ -789,7 +801,7 @@ void loop() {
         live--;
       } else {
         pixels[i].randomize();
-        pixels[i].writePixel();
+        pixels[i].writePixel(moveSpeed);
       }
       continue;
     }
@@ -800,7 +812,7 @@ void loop() {
       pixels[i].computeCycle(neighbors);
     }
 
-    pixels[i].writePixel();
+    pixels[i].writePixel(moveSpeed);
   }
   pixels.erase(std::remove_if(pixels.begin(), pixels.end(), [](const pixel& px) { return px.retired; }), pixels.end());
   adjustPixelCount(targetPixels);
