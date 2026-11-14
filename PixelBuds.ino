@@ -183,7 +183,13 @@ class pixel {
     bool retired = false;
     int spawnIndex = 0;
     int framesSinceMove = 1000;
+    float presence = 1.0f;       // display intensity, 0-1
+    bool fadingOut = false;
+    int role = 0;                // ROLE_CORE, ROLE_ARRIVING or ROLE_LEAVING
     void expire();
+    void retire();
+    void updatePresence();
+    float presenceTarget();
 };
 std::vector<pixel> pixels;
 //std::vector<pixel> processed;
@@ -259,6 +265,8 @@ void pixel::randomize() {
   this->turnsLived = 0;
   this->shareTo = true;
   this->framesSinceMove = 0;
+  this->fadingOut = false;
+  this->presence = this->presenceTarget();
 
 
 }
@@ -274,10 +282,37 @@ bool pixel::age(bool inContact) {
   }
   return false;
 }
-// Ends the pixel's life early: it goes dark on its next colour frame.
+// Ends the pixel's life early: it fades out, then goes dark.
 void pixel::expire() {
   this->turnsLived = this->lifeTime + 1;
   this->shareTo = false;
+  this->fadingOut = true;
+}
+// Removes the pixel at once and frees its cell.
+void pixel::retire() {
+  this->retired = true;
+  addAvailableIndex(this->xPos, this->yPos);
+}
+#define PRESENCE_FADE_FRAMES 40   // frames for a fallback fade in or out (~3 s)
+#define ROLE_CORE     0           // present in both phases of the transition
+#define ROLE_ARRIVING 1           // joins for the next phase, brightening across the transition
+#define ROLE_LEAVING  2           // absent from the next phase, dimming across the transition
+
+// Intensity the pixel should show now: the lower of its colour's and its role's transition level.
+float pixel::presenceTarget() {
+  float level = colourLevel(this->spawnIndex);
+  if (this->role == ROLE_ARRIVING) level = min(level, activeSegT);
+  else if (this->role == ROLE_LEAVING) level = min(level, 1.0f - activeSegT);
+  return level;
+}
+
+// Moves the display intensity toward its target, never faster than the fallback fade; a faded-out pixel goes dark.
+void pixel::updatePresence() {
+  float target = this->fadingOut ? 0.0f : this->presenceTarget();
+  float step = 1.0f / PRESENCE_FADE_FRAMES;
+  if (this->presence < target) this->presence = min(this->presence + step, target);
+  else this->presence = max(this->presence - step, target);
+  if (this->fadingOut && this->presence <= 0.0f) this->color = CRGB(0, 0, 0);
 }
 std::vector<pixel*> pixel::getNeighbors() {
   std::vector<pixel*> output;
@@ -355,20 +390,22 @@ CRGBArray<2> pixel::splitColors(CRGB A, CRGB B, int denom, int numer) {
 
 // Sets this pixel to the pooled colour of itself and its neighbours, divided among those with shareTo set.
 void pixel::splitColors(CRGB A, std::vector<pixel*>& neighbors) {
-  int tempCalc[3] = {A[0], A[1], A[2]};
-  int shareToSize = this->shareTo ? 1 : 0;
+  float tempCalc[3] = {(float)A[0], (float)A[1], (float)A[2]};
+  float shareToSize = this->shareTo ? 1.0f : 0.0f;
 
+  // Neighbours count in proportion to how visible they are.
   for (pixel* neighbor : neighbors) {
     for (int i = 0; i < 3; i++) {
-      tempCalc[i] += neighbor->color[i];
+      tempCalc[i] += neighbor->color[i] * neighbor->presence;
     }
-    if (neighbor->shareTo) shareToSize += 1;
+    if (neighbor->shareTo) shareToSize += neighbor->presence;
   }
-  if (shareToSize == 0) return;
+  if (shareToSize <= 0.0f) return;
+  shareToSize = max(shareToSize, 1.0f);
 
   CRGB output(0, 0, 0);
   for (int i = 0; i < 3; i++) {
-    output[i] = min(tempCalc[i] / shareToSize, 255);
+    output[i] = (uint8_t)min(tempCalc[i] / shareToSize, 255.0f);
   }
   this->color = this->shareTo ? output : CRGB(0, 0, 0);
 }
@@ -496,22 +533,24 @@ void pixel::move() {
     removeAvailableIndex(this->xPos, this->yPos);
     if (this->xPos != oldX || this->yPos != oldY) this->framesSinceMove = 0;
 }
-// Averages colours with any neighbours; an expired pixel then goes dark so it respawns.
+// Averages colours with any neighbours; an expired pixel then goes dark so it respawns, unless it is fading out.
 void pixel::computeCycle(std::vector<pixel*> & neighbors) {
   if (neighbors.size() != 0) {
     this->averageColors(neighbors);
   }
-  if (!this->shareTo) {
+  if (!this->shareTo && !this->fadingOut) {
     this->color = CRGB(0, 0, 0);
   }
 }
-// Writes the pixel's colour, fading it in over rampFrames after a move or spawn.
+// Writes the pixel's colour at its current intensity, fading it in over rampFrames after a move or spawn.
 void pixel::writePixel(int rampFrames) {
   CRGB& led = LEDs[getIndex(this->xPos, this->yPos)];
+  CRGB shown = this->color;
+  for (int i = 0; i < 3; i++) shown[i] = (uint8_t)(this->color[i] * this->presence);
   if (rampFrames <= 1 || this->framesSinceMove + 1 >= rampFrames) {
-    led = this->color;
+    led = shown;
   } else {
-    led = blend(led, this->color, (uint8_t)(255 * (this->framesSinceMove + 1) / rampFrames));
+    led = blend(led, shown, (uint8_t)(255 * (this->framesSinceMove + 1) / rampFrames));
   }
   if (this->framesSinceMove < 1000) this->framesSinceMove++;
 }
@@ -746,41 +785,68 @@ int noise = 0;
 int maxNoise = 0;
 CRGB color = CRGB(0, 0, 0);
 int frameCount=1;
-#define PIXEL_ADJUST_FRAMES 20   // frames between adding or expiring a pixel to reach the target
+static int lastSegment = -2;
 
-// Steers the pixel count toward the target and expires pixels whose spawn colour left the palette.
-void adjustPixelCount(int target) {
-  if (frameCount % PIXEL_ADJUST_FRAMES != 0) return;
-  int staying = 0;
-  for (pixel& px : pixels) if (px.shareTo) staying++;
+// Matches the pixels to the current transition: the extra pixels of the bigger phase arrive or leave
+// together across it, and pixels of a colour neither phase uses are recycled.
+void reconcilePixels() {
+  int from = max(1, (int)lroundf(activeSegFrom->pixels));
+  int to = max(1, (int)lroundf(activeSegTo->pixels));
+  int wantCore = min(from, to);
+  int wantArriving = to > from ? to - from : 0;
+  int wantLeaving = from > to ? from - to : 0;
 
-  if ((int)pixels.size() < target && !availableIndicies.empty()) {
+  if (activeSegIndex != lastSegment) {
+    for (pixel& px : pixels) {
+      if (px.retired) continue;
+      if (px.role == ROLE_ARRIVING) px.role = ROLE_CORE;
+      else if (px.role == ROLE_LEAVING) px.retire();
+    }
+    lastSegment = activeSegIndex;
+  }
+
+  int core = 0, arriving = 0, leaving = 0;
+  for (pixel& px : pixels) {
+    if (px.retired || px.fadingOut) continue;
+    if (colourAbsent(px.spawnIndex)) { px.expire(); continue; }
+    if (px.role == ROLE_CORE) core++;
+    else if (px.role == ROLE_ARRIVING) arriving++;
+    else leaving++;
+  }
+
+  // Surplus pixels take a transition role where one is open, otherwise fade out.
+  for (pixel& px : pixels) {
+    if (px.retired || px.fadingOut) continue;
+    if (px.role == ROLE_CORE && core > wantCore) {
+      core--;
+      if (leaving < wantLeaving) { px.role = ROLE_LEAVING; leaving++; }
+      else if (arriving < wantArriving) { px.role = ROLE_ARRIVING; arriving++; }
+      else px.expire();
+    } else if (px.role == ROLE_ARRIVING && arriving > wantArriving) {
+      arriving--;
+      px.expire();
+    } else if (px.role == ROLE_LEAVING && leaving > wantLeaving) {
+      leaving--;
+      px.expire();
+    }
+  }
+
+  // Missing pixels join; arrivals and leavers start at the transition's current intensity.
+  while ((core < wantCore || arriving < wantArriving || leaving < wantLeaving) && !availableIndicies.empty()) {
     pixel newPixel = pixel();
     newPixel.half = true;
+    if (core < wantCore) { newPixel.role = ROLE_CORE; core++; }
+    else if (arriving < wantArriving) { newPixel.role = ROLE_ARRIVING; arriving++; }
+    else { newPixel.role = ROLE_LEAVING; leaving++; }
     newPixel.randomize();
+    if (newPixel.role == ROLE_CORE) newPixel.presence = 0.0f;
     pixels.push_back(newPixel);
-  } else if (staying > target && staying > 0) {
-    int pick = random(staying);
-    for (pixel& px : pixels) {
-      if (px.shareTo && pick-- == 0) {
-        px.expire();
-        break;
-      }
-    }
-  } else {
-    for (pixel& px : pixels) {
-      if (px.shareTo && spawnColorRetired(px.spawnIndex)) {
-        px.expire();
-        break;
-      }
-    }
   }
 }
 
 void loop() {
   networkLoop();
   const Look& look = dayCycleUpdate();
-  int targetPixels = max(1, (int)lroundf(look.pixels));
   moveSpeed = max(1, (int)lroundf(look.moveEvery));
   colorSpeed = max(1, (int)lroundf(look.colorEvery));
   fadeBoard((int)lroundf(look.fade));
@@ -790,16 +856,16 @@ void loop() {
 //      handleModes();
 //     }
 
-  int live = pixels.size();
   for (size_t i = 0; i < pixels.size(); i++) {
+    if (pixels[i].retired) continue;
     std::vector<pixel*> neighbors = pixels[i].getNeighbors();
 
+    // A dark pixel respawns in the same role, unless it was fading out for good.
     if (pixels[i].age(!neighbors.empty())) {
-      addAvailableIndex(pixels[i].getX(), pixels[i].getY());
-      if (live > targetPixels) {
-        pixels[i].retired = true;
-        live--;
+      if (pixels[i].fadingOut) {
+        pixels[i].retire();
       } else {
+        addAvailableIndex(pixels[i].getX(), pixels[i].getY());
         pixels[i].randomize();
         pixels[i].writePixel(moveSpeed);
       }
@@ -811,11 +877,14 @@ void loop() {
     if (frameCount % colorSpeed == 0) {
       pixels[i].computeCycle(neighbors);
     }
+    pixels[i].updatePresence();
 
-    pixels[i].writePixel(moveSpeed);
+    // A pixel that just went dark is left to fade with the trails rather than blanked.
+    const CRGB& c = pixels[i].color;
+    if (c.r >= 5 || c.g >= 5 || c.b >= 5) pixels[i].writePixel(moveSpeed);
   }
+  reconcilePixels();
   pixels.erase(std::remove_if(pixels.begin(), pixels.end(), [](const pixel& px) { return px.retired; }), pixels.end());
-  adjustPixelCount(targetPixels);
   dayCycleReportPixels(pixels.size());
   frameCount++;
  

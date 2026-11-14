@@ -57,6 +57,11 @@ static bool testActive = false;
 static uint32_t testStartMs = 0;
 
 static Look activeLook = LOOK_DAY;
+// The stretch between two keyframes that the clock is in, with linear progress 0-1 across it.
+static int activeSegIndex = -1;
+static float activeSegT = 1.0f;
+static const Look* activeSegFrom = &LOOK_DAY;
+static const Look* activeSegTo = &LOOK_DAY;
 static const char* activePhase = "day";
 static float activeMinute = 12 * 60;
 static bool activeFromClock = false;
@@ -133,6 +138,10 @@ static Look lookAt(float minute, const char** phase) {
 
   float span = b.minute - a.minute;
   float t = span > 0 ? (minute - a.minute) / span : 1.0f;
+  activeSegIndex = i;
+  activeSegT = t;
+  activeSegFrom = a.look;
+  activeSegTo = b.look;
   t = t * t * (3.0f - 2.0f * t);
 
   Look out;
@@ -189,6 +198,9 @@ const Look& dayCycleUpdate() {
     activeFromClock = true;
   } else {
     activeLook = LOOK_DAY;
+    activeSegIndex = -1;
+    activeSegT = 1.0f;
+    activeSegFrom = activeSegTo = &LOOK_DAY;
     activePhase = "day (waiting for clock)";
     activeFromClock = false;
   }
@@ -208,9 +220,16 @@ int pickSpawnIndex() {
   return PALETTE_SIZE - 1;
 }
 
-// True when the active look has (almost) dropped this palette colour.
-bool spawnColorRetired(int index) {
-  return activeLook.weights[index] < 0.05f;
+// Intensity (0-1) for a palette colour: ramps linearly across the current transition to match the next phase.
+float colourLevel(int index) {
+  float from = activeSegFrom->weights[index] > 0.0f ? 1.0f : 0.0f;
+  float to = activeSegTo->weights[index] > 0.0f ? 1.0f : 0.0f;
+  return from + (to - from) * activeSegT;
+}
+
+// True when neither end of the current transition uses this palette colour.
+bool colourAbsent(int index) {
+  return activeSegFrom->weights[index] <= 0.0f && activeSegTo->weights[index] <= 0.0f;
 }
 
 void dayCycleReportPixels(int count) {
@@ -251,11 +270,11 @@ String dayCycleStatus() {
     "PixelBuds\n"
     "clock:      %s\n"
     "mode:       %s\n"
-    "light time: %s  phase: %s\n"
+    "light time: %s  phase: %s (%.0f%% of the way to the next keyframe)\n"
     "sun:        rise %s  set %s%s\n"
     "look:       brightness %.0f  pixels %d/%.0f  move every %.1f  mix every %.1f  fade %.0f\n"
     "palette:   ",
-    clock, mode, t, activePhase, rise, set, sunFromClock ? "" : " (defaults, no clock yet)",
+    clock, mode, t, activePhase, activeSegT * 100.0f, rise, set, sunFromClock ? "" : " (defaults, no clock yet)",
     activeLook.brightness, reportedPixels, activeLook.pixels, activeLook.moveEvery,
     activeLook.colorEvery, activeLook.fade);
   for (int c = 0; c < PALETTE_SIZE && n < (int)sizeof(buf); c++) {
