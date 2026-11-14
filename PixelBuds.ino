@@ -180,6 +180,9 @@ class pixel {
     int minX = 0;
     bool half = false;
     bool shareTo = true;
+    bool retired = false;
+    int spawnIndex = 0;
+    void expire();
 };
 std::vector<pixel> pixels;
 //std::vector<pixel> processed;
@@ -249,36 +252,17 @@ void pixel::randomize() {
 
 
 
-  int rand3 = random(3);
   this->lifeTime = random(30, 100);
-  //  this->half = rand2;/
-  switch (rand3) {
-    case (0): {
-        this->color = CRGB(255, 0, 0);
-        break;
-      }
-    case (1): {
-        this->color = CRGB(0, 255, 0);
-        break;
-      }
-    case (2): {
-        this->color = CRGB(0, 0, 255);
-        break;
-      }
-    default: {
-        Serial.println("Uncaught Error");
-      }
-  }
+  this->spawnIndex = pickSpawnIndex();
+  this->color = paletteColors[this->spawnIndex];
   this->turnsLived = 0;
   this->shareTo = true;
 
 
 }
-// Respawns a dark pixel and returns true; otherwise ages it while it touches another pixel.
+// Returns true once the pixel has gone dark; otherwise ages it while it touches another pixel.
 bool pixel::age(bool inContact) {
   if (this->color[0] < 5 && this->color[1] < 5 && this->color[2] < 5) {
-    addAvailableIndex(this->xPos,this->yPos);
-    this->randomize();
     return true;
   }
 
@@ -287,6 +271,11 @@ bool pixel::age(bool inContact) {
     this->shareTo = !(this->turnsLived > this->lifeTime);
   }
   return false;
+}
+// Ends the pixel's life early: it goes dark on its next colour frame.
+void pixel::expire() {
+  this->turnsLived = this->lifeTime + 1;
+  this->shareTo = false;
 }
 std::vector<pixel*> pixel::getNeighbors() {
   std::vector<pixel*> output;
@@ -513,7 +502,6 @@ void pixel::computeCycle(std::vector<pixel*> & neighbors) {
 }
 void pixel::writePixel() {
   LEDs[getIndex(this->xPos, this->yPos)] = this->color;
-
 }
 
 RotaryEncoder *encoder = nullptr;
@@ -671,6 +659,7 @@ void setup() {
   //  randomSeed(analogRead(0));
   FastLED.setBrightness(BRIGHTNESS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);
+  FastLED.setDither(0);
   FastLED.clear();
 //  FastLED.show();/
     pinMode(ONBOARD_LED_PIN, OUTPUT);
@@ -745,25 +734,63 @@ int noise = 0;
 int maxNoise = 0;
 CRGB color = CRGB(0, 0, 0);
 int frameCount=1;
+#define PIXEL_ADJUST_FRAMES 20   // frames between adding or expiring a pixel to reach the target
 
+// Steers the pixel count toward the target and expires pixels whose spawn colour left the palette.
+void adjustPixelCount(int target) {
+  if (frameCount % PIXEL_ADJUST_FRAMES != 0) return;
+  int staying = 0;
+  for (pixel& px : pixels) if (px.shareTo) staying++;
+
+  if ((int)pixels.size() < target && !availableIndicies.empty()) {
+    pixel newPixel = pixel();
+    newPixel.half = true;
+    newPixel.randomize();
+    pixels.push_back(newPixel);
+  } else if (staying > target && staying > 0) {
+    int pick = random(staying);
+    for (pixel& px : pixels) {
+      if (px.shareTo && pick-- == 0) {
+        px.expire();
+        break;
+      }
+    }
+  } else {
+    for (pixel& px : pixels) {
+      if (px.shareTo && spawnColorRetired(px.spawnIndex)) {
+        px.expire();
+        break;
+      }
+    }
+  }
+}
 
 void loop() {
   networkLoop();
-//  while(true){delay(5000);}/
-  //  FastLED.clear();/
-  fadeBoard(56);
-  FastLED.setBrightness(brightness);
-//  Serial.println(digitalRead(ROTARY_SW));/
+  const Look& look = dayCycleUpdate();
+  int targetPixels = max(1, (int)lroundf(look.pixels));
+  moveSpeed = max(1, (int)lroundf(look.moveEvery));
+  colorSpeed = max(1, (int)lroundf(look.colorEvery));
+  fadeBoard((int)lroundf(look.fade));
+  FastLED.setBrightness((uint8_t)lroundf(look.brightness));
 //   if(encoderPress()){
 // //    handleEncoder(0);/
 //      handleModes();
 //     }
 
+  int live = pixels.size();
   for (size_t i = 0; i < pixels.size(); i++) {
     std::vector<pixel*> neighbors = pixels[i].getNeighbors();
 
     if (pixels[i].age(!neighbors.empty())) {
-      pixels[i].writePixel();
+      addAvailableIndex(pixels[i].getX(), pixels[i].getY());
+      if (live > targetPixels) {
+        pixels[i].retired = true;
+        live--;
+      } else {
+        pixels[i].randomize();
+        pixels[i].writePixel();
+      }
       continue;
     }
     if (neighbors.empty() && frameCount % moveSpeed == 0) {
@@ -775,6 +802,9 @@ void loop() {
 
     pixels[i].writePixel();
   }
+  pixels.erase(std::remove_if(pixels.begin(), pixels.end(), [](const pixel& px) { return px.retired; }), pixels.end());
+  adjustPixelCount(targetPixels);
+  dayCycleReportPixels(pixels.size());
   frameCount++;
  
   

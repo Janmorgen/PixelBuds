@@ -3,11 +3,13 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <FastLED.h>
+#include <WebServer.h>
 #include <WiFi.h>
 
+#include "daycycle.h"
 #include "secrets.h"
 
-// Wi-Fi station connection and wireless flashing (ArduinoOTA).
+// Wi-Fi station connection, network time, wireless flashing (ArduinoOTA) and a plain-text status server.
 
 #define PIXELBUDS_HOSTNAME "pixelbuds"
 #define WIFI_RETRY_INTERVAL_MS 30000
@@ -15,6 +17,25 @@
 static uint32_t wifiLastAttempt = 0;
 static bool wifiWasConnected = false;
 static bool otaStarted = false;
+static bool webStarted = false;
+static WebServer web(80);
+
+// Serves status at /, starts a test day at /test and ends it at /test/stop.
+static void webBegin() {
+  web.on("/", []() { web.send(200, "text/plain", dayCycleStatus()); });
+  web.on("/test", []() {
+    startTestDay();
+    dayCycleUpdate();
+    web.send(200, "text/plain", "Test day started: 05:00 to 05:00 in 24 minutes, one minute per hour.\n\n" + dayCycleStatus());
+  });
+  web.on("/test/stop", []() {
+    stopTestDay();
+    dayCycleUpdate();
+    web.send(200, "text/plain", "Test day stopped.\n\n" + dayCycleStatus());
+  });
+  web.begin();
+  webStarted = true;
+}
 
 // Registers the OTA callbacks and starts listening; needs a live Wi-Fi link.
 static void otaBegin() {
@@ -46,6 +67,7 @@ void networkBegin() {
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   wifiLastAttempt = millis();
+  configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
 }
 
 // Keeps Wi-Fi up, starts OTA once connected and services OTA requests; call every loop.
@@ -55,8 +77,10 @@ void networkLoop() {
       wifiWasConnected = true;
       Serial.printf("Wi-Fi up at %s (%s.local)\n", WiFi.localIP().toString().c_str(), PIXELBUDS_HOSTNAME);
       if (!otaStarted) otaBegin();
+      if (!webStarted) webBegin();
     }
     ArduinoOTA.handle();
+    web.handleClient();
     return;
   }
 
