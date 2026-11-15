@@ -29,7 +29,7 @@ struct Look {
   float moveEvery;               // frames between moves
   float colorEvery;              // frames between colour mixes
   float fade;                    // per-frame trail fade, 0-255
-  float islandHold;              // 0-1, how strongly the island-hold experiment applies
+  float effectStrength;          // 0-1, how strongly the /effects settings act
 };
 
 static const Look LOOK_DAY     = {100, {1.0f, 1.0f, 1.0f, 0.0f}, 30, 1, 1, 56, 1};
@@ -210,7 +210,7 @@ static Look lookAt(float minute, const char** phase) {
   out.moveEvery = a.look->moveEvery + (b.look->moveEvery - a.look->moveEvery) * t;
   out.colorEvery = a.look->colorEvery + (b.look->colorEvery - a.look->colorEvery) * t;
   out.fade = a.look->fade + (b.look->fade - a.look->fade) * t;
-  out.islandHold = a.look->islandHold + (b.look->islandHold - a.look->islandHold) * t;
+  out.effectStrength = a.look->effectStrength + (b.look->effectStrength - a.look->effectStrength) * t;
   return out;
 }
 

@@ -5,7 +5,7 @@
 #include <string.h>
 
 #include "daycycle.h"
-#include "islands.h"
+#include "effects.h"
 
 // Temporary changes made over HTTP. Most clear when the phase name changes; power-off "until morning"
 // and the sleep timer last until the wake or day phase. Nothing here survives a reboot.
@@ -30,7 +30,7 @@ static float dimmer = 1.0f;          // shown share of the look's brightness, 0-
 static float dimmerRate = 0.001f;    // largest dimmer change per millisecond
 static uint32_t dimmerLastMs = 0;
 static char overridePhase[24] = "";  // phase the overrides were last checked against
-static float scheduledIslandHold = 0;  // the look's island hold before the /islands setting
+static float scheduledEffectStrength = 0;  // the look's effect strength before the /effects setting
 
 // The dimmer the overrides ask for right now.
 static float dimmerTarget() {
@@ -121,13 +121,13 @@ void overridesUpdate() {
   for (int c = 0; c < PALETTE_SIZE; c++) {
     if (colourOverride[c] >= 0) activeLook.weights[c] = colourOverride[c];
   }
-  scheduledIslandHold = activeLook.islandHold;
-  if (islandHoldSetting >= 0) activeLook.islandHold = islandHoldSetting;
+  scheduledEffectStrength = activeLook.effectStrength;
+  if (effectStrengthSetting >= 0) activeLook.effectStrength = effectStrengthSetting;
 }
 
-// Island hold in force: the fixed setting, or the schedule's.
-float currentIslandHold() {
-  return islandHoldSetting >= 0 ? islandHoldSetting : scheduledIslandHold;
+// Effect strength in force: the fixed setting, or the schedule's.
+float currentEffectStrength() {
+  return effectStrengthSetting >= 0 ? effectStrengthSetting : scheduledEffectStrength;
 }
 
 // FastLED brightness for this frame.
