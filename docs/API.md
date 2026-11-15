@@ -5,8 +5,9 @@ Reference for writing a remote control (phone app, web page, home automation) ag
 ## Contents
 - [Transport](#transport)
 - [Conventions every client must follow](#conventions-every-client-must-follow)
+- [Response format](#response-format)
 - [State model](#state-model)
-- [Reading state: `/status.json`](#reading-state-statusjson)
+- [The status object](#the-status-object)
 - [Endpoint reference](#endpoint-reference)
   - [Status](#status)
   - [Overrides (temporary)](#overrides-temporary)
@@ -24,7 +25,7 @@ Reference for writing a remote control (phone app, web page, home automation) ag
 | Address | The board's IP on the LAN. It uses DHCP, so reserve an address on the router; `pixelbuds.local` is not reliable |
 | Methods | Every route answers any method. Use `GET` |
 | Request body | Ignored. All options go in the query string |
-| Responses | `text/plain` for every route except `/status.json`, which is `application/json` |
+| Responses | `application/json` for every route except `/`, `/status` and `/help`, which are plain text for people |
 | Connection | `Connection: close` on every response; one request per connection |
 | Authentication | None. Anything on the LAN can control the light |
 | CORS | No `Access-Control-Allow-Origin` header is sent (see [Known gaps](#known-gaps-for-a-remote-control)) |
@@ -32,13 +33,38 @@ Reference for writing a remote control (phone app, web page, home automation) ag
 
 ## Conventions every client must follow
 
-- **Read state only from `/status.json`.** Command routes reply with human-readable text whose wording may change. Check the status code, then fetch `/status.json`.
+- **Render from the `status` object in each reply.** Every successful command returns the complete, already-updated state, so no follow-up request is needed. Never parse `message` or `error`; their wording is for people and may change.
 - **Send only documented options.** Any unknown query option, including a cache buster such as `?_=1700000000`, returns `400`.
 - **Every option needs a value.** The web server drops options without `=`, so on/off actions are separate paths (`/power/off`), never `?off`.
 - **Validation is all-or-nothing.** If any option in a request is invalid, the request returns `400` and nothing changes.
 - **Plus signs must be encoded.** In a query string `+` decodes to a space. Send positive numbers without a sign, or encode it as `%2B`.
 - **Times are local 24-hour `H:MM` or `HH:MM`** (`7:30` and `07:30` are accepted; `7:5` is not). Minutes and seconds are integers unless stated.
 - **Every request takes effect immediately** and affects everyone; there is no session or undo.
+
+## Response format
+
+Every JSON route except `/status.json` wraps its reply in an envelope.
+
+Success (`200`):
+
+```json
+{ "ok": true, "message": "Brightness set.", "status": { ...the status object... } }
+```
+
+Failure (`400`, `404`, `409`):
+
+```json
+{ "ok": false, "error": "?scale= takes a percentage, 0 to 100." }
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `ok` | bool | `true` for success, `false` for any error |
+| `message` | string | Short human-readable confirmation |
+| `status` | object | The full state after the change; identical in shape to `/status.json` |
+| `error` | string | Human-readable reason, naming the valid values where relevant |
+
+`/status.json` returns the bare status object, with no envelope. Routes that take options but are called without any (`/brightness`, `/adjust`, `/colors`, `/schedule`, `/rules`, `/islands`) change nothing and simply return the envelope, so they double as reads.
 
 ## State model
 
@@ -50,7 +76,7 @@ The light has three layers. A remote control should present them separately.
 | **Overrides** | `/power`, `/brightness`, `/sleep`, `/adjust`, `/colors`, `/phase/next`, `/pause` | Until the **phase name changes**, `/reset`, or a reboot |
 | **Settings** | `/schedule`, `/rules`, `/islands` | Saved to flash; kept across reboots until changed |
 
-**Phases**, in daily order: `embers` → `wake` (sunrise ramp) → `day` → `golden hour` (two segments, either side of sunset) → `evening` → `wind-down` → `embers`. An override ends when the phase *name* changes, so the two golden-hour segments and embers across midnight don't end one. `overrides.until` in `/status.json` says when the current overrides will end.
+**Phases**, in daily order: `embers` → `wake` (sunrise ramp) → `day` → `golden hour` (two segments, either side of sunset) → `evening` → `wind-down` → `embers`. An override ends when the phase *name* changes, so the two golden-hour segments and embers across midnight don't end one. `overrides.until` in the status says when the current overrides will end.
 
 **Exceptions to "until the phase changes":**
 - `/power/off?until=morning` and `/sleep` last until the `wake` (or `day`) phase begins.
@@ -59,14 +85,17 @@ The light has three layers. A remote control should present them separately.
 
 **Brightness shown** = `look.brightness` × `power.dimmer`. The dimmer combines power, the brightness override and the sleep ramp, and glides to new values: about 1 s for brightness changes, 3 s when overrides clear, and the requested fade for power.
 
-## Reading state: `/status.json`
+## The status object
 
-Example (night, no overrides):
+Returned bare by `/status.json` and as `status` in every success envelope. Example (night, no overrides):
 
 ```json
 {
   "clock": "2026-11-15T00:51:21-0700",
   "mode": "schedule",
+  "hold": null,
+  "testDay": null,
+  "skip": null,
   "lightTime": "00:51",
   "phase": "embers",
   "progress": 0.12,
@@ -103,7 +132,10 @@ Example (night, no overrides):
 |---|---|---|
 | `clock` | string \| null | Local wall clock, ISO 8601 with offset. `null` until the board gets the time from NTP |
 | `mode` | string | `schedule`, `test` (24-minute test day), `hold`, `skipped` (after `/phase/next`), or `fallback` (no clock yet) |
-| `lightTime` | `"HH:MM"` | The time the light is showing. Equals the clock in `schedule` mode; stale while holding a named look |
+| `hold` | object \| null | While `mode` is `hold`: `{look, time, secondsLeft}`. Exactly one of `look` (`day`, `golden`, `evening`, `embers`) and `time` (`"HH:MM"`) is set, the other `null`. `secondsLeft` is `null` when the hold has no `for=` limit |
+| `testDay` | object \| null | While `mode` is `test`: `{secondsLeft}` until the test day ends by itself |
+| `skip` | object \| null | While `mode` is `skipped`: `{look, catchUpAt, secondsLeft}`: the look jumped to, the `"HH:MM"` when the schedule reaches it, and seconds until then |
+| `lightTime` | `"HH:MM"` \| null | The time the light is showing. Equals the clock in `schedule` mode, `catchUpAt` while skipped; `null` while holding a named look |
 | `phase` | string | Current phase name (see [State model](#state-model)). `day (waiting for clock)` before NTP |
 | `progress` | number 0–1 | Progress through the current schedule segment |
 | `sun.rise`, `sun.set` | `"HH:MM"` | Today's real sunrise and sunset, before any `/schedule` shift |
@@ -119,7 +151,7 @@ Example (night, no overrides):
 | `power.on` | bool | `false` while powered off (including after a sleep timer finishes) |
 | `power.untilMorning` | bool | The power-off lasts until wake rather than the next phase |
 | `power.sleepSecondsLeft` | int \| null | Seconds until a running sleep timer reaches off |
-| `power.dimmer` | number 0–1 | The share of the look's brightness being shown right now |
+| `power.dimmer` | number 0–1 | The share of the look's brightness being shown right now. It glides, so a command's reply shows where the glide starts; `overrides.brightness` and `power.on` show the target |
 | `overrides.brightness` | int 0–100 | Brightness override, percent |
 | `overrides.speed`, `.pixels`, `.trail`, `.mix` | int | `/adjust` percentages; 100 means no change |
 | `overrides.colors.<colour>` | int 0–100 \| null | Colour override; `null` means the schedule decides |
@@ -135,14 +167,14 @@ Example (night, no overrides):
 
 ## Endpoint reference
 
-Each command returns `200` with a short text confirmation unless noted. Defaults are the values used when an option is left out.
+Each command returns `200` with the success envelope unless noted. Defaults are the values used when an option is left out.
 
 ### Status
 
 | Route | Options | Returns |
 |---|---|---|
-| `/status.json` | none (extras are ignored here) | The JSON above |
-| `/` or `/status` | none | The same state as plain text, for people |
+| `/status.json` | none (extras are ignored here) | The bare status object |
+| `/` or `/status` | none (extras are ignored) | The same state as plain text, for people |
 | `/help` | none | A plain-text route list |
 
 ### Overrides (temporary)
@@ -265,36 +297,35 @@ No options. Ends a test day or hold and returns to the wall clock.
 
 | Code | When | Body |
 |---|---|---|
-| `200` | Success | Text confirmation, usually followed by the relevant status lines |
-| `400` | Unknown option, bad value, missing required option, or an impossible combination | One line naming the problem and the valid values |
-| `404` | Unknown path | `No such endpoint: /path`, then the help text |
-| `409` | `/phase/next` during a test day or hold, or before the clock is set | One line |
+| `200` | Success | Success envelope with the full status |
+| `400` | Unknown option, bad value, missing required option, or an impossible combination | Error envelope naming the problem and the valid values |
+| `404` | Unknown path | Error envelope: `No such endpoint: /path. See /help.` |
+| `409` | `/phase/next` during a test day or hold, or before the clock is set | Error envelope |
 
-Error bodies are for people and may change wording; branch on the status code.
+Branch on the HTTP status code (or `ok`), not on the error text.
 
 ## Recommended client pattern
 
 1. On launch, `GET /status.json`. If it fails, show the board as offline.
 2. Poll `/status.json` every 2–5 s while the remote is on screen. Every second at most: requests compete with the animation.
-3. After any command, check for `200`, then fetch `/status.json` and render from it rather than assuming the result.
+3. After any command, check for `200` and render from the reply's `status`. On an error, show `error` and keep the previous state.
 4. Watch `uptimeSeconds`: if it drops, the board rebooted and every override is gone.
 5. Show when overrides end, from `overrides.until` (or "until wake" when `power.untilMorning` is true).
 6. Disable `/phase/next` when `mode` is `test` or `hold`, or `clock` is `null`.
+7. Show countdowns from `hold.secondsLeft`, `testDay.secondsLeft`, `skip.secondsLeft` and `power.sleepSecondsLeft`, counting down locally between polls.
 
 ```sh
 B=http://192.168.1.218
 curl -s "$B/status.json"
-curl -s -o /dev/null -w '%{http_code}\n' "$B/brightness?scale=40"
+curl -s "$B/brightness?scale=40" | jq '.ok, .status.power.dimmer'
 curl -s "$B/power/off?fade=5&until=morning"
 curl -s "$B/schedule?sunrise=-20&winddown=22:30"
 ```
 
 ## Known gaps for a remote control
 
-These limit what a client can show or do today; each is a small firmware change.
+These limit what a client can do today.
 
 - **No CORS headers.** A web page served from another origin can't read responses (native apps and `curl` are unaffected). Adding `Access-Control-Allow-Origin: *` to every response would fix it.
-- **Hold details aren't in the JSON.** `mode` says `hold`, but not which look or time is held or how long is left. The same goes for the catch-up time after `/phase/next`. The plain-text status has both.
-- **Commands reply in text.** A client needs a second request for the new state.
 - **No discovery.** The board has no stable name on the network; reserve its IP.
 - **State-changing GETs.** Link previews or browser prefetching of a command URL will run it.

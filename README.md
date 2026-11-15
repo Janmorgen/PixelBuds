@@ -24,7 +24,7 @@ arduino-cli upload -p <board IP> --protocol network --upload-field password=<OTA
 Looks change at keyframes anchored to local sunrise and sunset: embers, wake (sunrise ramp), day, golden hour (either side of sunset), evening, wind-down (22:00) and embers (23:00). Transitions ramp across each stretch. A late summer sunset pushes wind-down later so the evening always gets at least an hour.
 
 ## HTTP API
-Every route answers GET at `http://<board IP>/`, replies in plain text, and checks all its options before changing anything. `/help` lists them all. For writing a client such as a remote control, see [docs/API.md](docs/API.md): the JSON status fields, exact option ranges, error codes and client conventions.
+Every route answers GET at `http://<board IP>/` and checks all its options before changing anything. Routes reply with JSON carrying the full updated status; `/`, `/status` and `/help` are plain text. `/help` lists them all. For writing a client such as a remote control, see [docs/API.md](docs/API.md): the JSON status fields, exact option ranges, error codes and client conventions.
 
 ### Status
 | Route | Does |
