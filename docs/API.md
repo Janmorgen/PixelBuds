@@ -1,8 +1,9 @@
 # PixelBuds HTTP API
 
-Reference for writing a remote control (phone app, web page, home automation) against the PixelBuds firmware on the `web-control` branch. The firmware's own `/help` route gives a short version of the same list.
+The developer reference for every HTTP route the PixelBuds firmware serves (the `effects` branch), for writing a remote control such as a phone app, web page or home automation. This file is the source of truth for the API: [Route index](#route-index) lists every route with its options, and [Endpoint reference](#endpoint-reference) describes each one. The firmware's own `/help` route gives a short version of the same list.
 
 ## Contents
+- [Route index](#route-index)
 - [Transport](#transport)
 - [Conventions every client must follow](#conventions-every-client-must-follow)
 - [Response format](#response-format)
@@ -16,6 +17,38 @@ Reference for writing a remote control (phone app, web page, home automation) ag
 - [Errors](#errors)
 - [Recommended client pattern](#recommended-client-pattern)
 - [Known gaps for a remote control](#known-gaps-for-a-remote-control)
+
+## Route index
+
+Every route the firmware registers. Options go in the query string; a route listed with no options rejects any. Values are summarised here; each route's section has the details and defaults.
+
+| Route | Options | Does |
+|---|---|---|
+| [`/`, `/status`](#status) | none | Status as plain text, for people |
+| [`/status.json`](#status) | none | The status object as JSON |
+| [`/help`](#status) | none | A plain-text route list |
+| [`/power/off`](#poweroff) | `fade` 0–600 s · `until` `phase`\|`morning` | Turns the light off |
+| [`/power/on`](#poweron) | `fade` 0–600 s | Turns the light on; cancels a sleep timer |
+| [`/brightness`](#brightness) | `scale` 0–100 | Percent of the look's brightness |
+| [`/sleep`](#sleep) | `in` 1–240 min, required | Dims to off over `in` minutes, then off until wake |
+| [`/adjust`](#adjust) | `speed`, `trail`, `mix` 25–400 · `pixels` 25–200 | Percent changes to the current look |
+| [`/colors`](#colors) | `red`, `green`, `blue`, `amber` 0–100 or `auto` | How often each colour spawns |
+| [`/phase/next`](#phasenext) | none | Shows the next look now |
+| [`/pause/on`, `/pause/off`](#pauseon-pauseoff) | none | Freezes or resumes the motion |
+| [`/shuffle`](#shuffle) | none | Rescatters every pixel |
+| [`/reset`](#reset) | none | Clears every override |
+| [`/schedule`](#schedule) | `winddown`, `embers` HH:MM · `wake` 0–240 · `golden` 0–180 · `sunrise`, `sunset` −180–180 | Schedule times (saved) |
+| [`/schedule/reset`](#reset-routes) | none | Schedule back to defaults |
+| [`/rules`](#rules) | `mix` `pool`\|`pair` · `mixrate` 0–100 · `life` MIN-MAX · `expire` `snap`\|`fade` · `round` `on`\|`off` | Pixel mixing, lifetime and death (saved) |
+| [`/rules/reset`](#reset-routes) | none | Rules back to defaults |
+| [`/effects`](#effects) | `ageing` `normal`\|`edge` · `death` list · `island` list · `strength` `auto`\|0–100 · `boost` 0–5 | Effects on ageing, pixel death and island breakup (saved) |
+| [`/effects/reset`](#reset-routes) | none | Effects back to defaults |
+| [`/islands`](#islands-old-name) | `mode` · `hold` · `boost` · `round` | Old name for `/effects`, kept for existing clients |
+| [`/islands/reset`](#reset-routes) | none | Same as `/effects/reset` |
+| [`/test`](#test) | `hold` look\|HH:MM · `for` 1–1440 min | Plays a 24-minute test day, or holds one look or time |
+| [`/test/stop`](#teststop) | none | Ends a test day or hold |
+
+Any other path returns `404`.
 
 ## Transport
 
@@ -64,7 +97,7 @@ Failure (`400`, `404`, `409`):
 | `status` | object | The full state after the change; identical in shape to `/status.json` |
 | `error` | string | Human-readable reason, naming the valid values where relevant |
 
-`/status.json` returns the bare status object, with no envelope. Routes that take options but are called without any (`/brightness`, `/adjust`, `/colors`, `/schedule`, `/rules`, `/islands`) change nothing and simply return the envelope, so they double as reads.
+`/status.json` returns the bare status object, with no envelope. Routes that take options but are called without any (`/brightness`, `/adjust`, `/colors`, `/schedule`, `/rules`, `/effects`, `/islands`) change nothing and simply return the envelope, so they double as reads.
 
 ## State model
 
@@ -74,7 +107,7 @@ The light has three layers. A remote control should present them separately.
 |---|---|---|
 | **Schedule** | The sun and `/schedule` | Always running. Picks the current phase and look |
 | **Overrides** | `/power`, `/brightness`, `/sleep`, `/adjust`, `/colors`, `/phase/next`, `/pause` | Until the **phase name changes**, `/reset`, or a reboot |
-| **Settings** | `/schedule`, `/rules`, `/islands` | Saved to flash; kept across reboots until changed |
+| **Settings** | `/schedule`, `/rules`, `/effects` | Saved to flash; kept across reboots until changed |
 
 **Phases**, in daily order: `embers` → `wake` (sunrise ramp) → `day` → `golden hour` (two segments, either side of sunset) → `evening` → `wind-down` → `embers`. An override ends when the phase *name* changes, so the two golden-hour segments and embers across midnight don't end one. `overrides.until` in the status says when the current overrides will end.
 
@@ -120,7 +153,10 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
     "until": { "phase": "wake", "at": "07:13" }
   },
   "rules": { "mix": "pool", "mixrate": 100, "life": [30, 100], "expire": "snap", "round": false },
-  "islands": { "mode": "split", "hold": 0.0, "holdSetting": "auto", "boost": 2.0 },
+  "effects": {
+    "ageing": "normal", "death": [], "island": [],
+    "strength": 0.0, "strengthSetting": "auto", "boost": 2.0, "islandsNow": 2
+  },
   "uptimeSeconds": 408,
   "build": "Nov 15 2026 00:41:47"
 }
@@ -158,10 +194,13 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
 | `overrides.paused` | bool | Motion is frozen |
 | `overrides.until` | object \| null | `{phase, at}` of the next phase change, when overrides end. `null` during a hold |
 | `rules` | object | Saved `/rules` values; `life` is `[min, max]` |
-| `islands.mode` | string | `off`, `split`, `edge` or `orphan` |
-| `islands.hold` | number 0–1 | Island-hold strength in force now |
-| `islands.holdSetting` | `"auto"` \| int 0–100 | The saved `hold` option |
-| `islands.boost` | number 0–5 | The saved `boost` option |
+| `effects.ageing` | string | `normal` or `edge` |
+| `effects.death` | string[] | Death effects in force, from `orphan`, `contagion`, `scatter`; empty for none |
+| `effects.island` | string[] | Island effects in force, from `seed`, `ripple`; empty for none |
+| `effects.strength` | number 0–1 | Effect strength in force now; 0 means every effect is idle |
+| `effects.strengthSetting` | `"auto"` \| int 0–100 | The saved `strength` option |
+| `effects.boost` | number 0–5 | The saved `boost` option |
+| `effects.islandsNow` | int | Islands (two or more touching lit pixels) on the matrix right now |
 | `uptimeSeconds` | int | Seconds since boot. A drop means the board rebooted, which cleared all overrides |
 | `build` | string | Firmware compile time. Changes after a wireless update |
 
@@ -243,7 +282,7 @@ No options. Clears every override: power-off, sleep, brightness, adjust, colours
 
 ### Settings (saved)
 
-Saved to flash only when a value changes. With no options, each route returns its current values. Each has a reset route that takes no options: `/schedule/reset`, `/rules/reset`, `/islands/reset`.
+Saved to flash only when a value changes. With no options, each route returns its current values.
 
 #### `/schedule`
 | Option | Values | Default |
@@ -268,17 +307,38 @@ Rebuilds today's schedule immediately. A late sunset still pushes wind-down and 
 
 `life` applies to newly spawned pixels, so changes show gradually.
 
-#### `/islands`
-The island-hold experiment for longer-lived daytime clumps.
+#### `/effects`
+What happens as pixels age and die, and when an island (two or more touching lit pixels) breaks up. Every selected effect applies to every pixel across the whole matrix. Effects act in proportion to `strength`, so with `strength=auto` they run by day and fade out across golden hour. The defaults turn every effect off, which is how the light behaved before the island work.
 
 | Option | Values | Default |
 |---|---|---|
-| `mode` | `off`, `split` (left half `edge`, right half `orphan`), `edge`, `orphan` | `split` |
-| `boost` | 0–5, decimals allowed, no sign | 2 |
-| `hold` | `auto` (follows the look: on by day, off otherwise) or 0–100 to fix the strength in every phase | `auto` |
-| `round` | `on` or `off`: same setting as `/rules?round=` | `off` |
+| `ageing` | `normal`, or `edge`: contact ages a pixel more slowly, and more slowly still the more neighbours it has, so islands wear from the outside in | `normal` |
+| `death` | `none`, or a comma-separated list of effects run on a dying pixel's neighbours: `orphan` (a neighbour left alone gets a longer life), `contagion` (neighbours lose part of their remaining life), `scatter` (neighbours are pushed a few cells away) | `none` |
+| `island` | `none`, or a comma-separated list of effects run when an island breaks up without merging into another: `seed` (the next respawns appear where it was, in its colour), `ripple` (a ring in its colour spreads from where it was; only islands that reached 3 pixels and lasted about 2 s) | `none` |
+| `strength` | `auto` (follows the look: rises across the wake hour, full by day, falls to 0 across golden hour, 0 in evening and embers) or 0–100 to fix it in every phase | `auto` |
+| `boost` | 0–5, decimals allowed, no sign: how strongly each effect acts at full strength (edge and orphan lives, the share of life contagion takes, scatter distance, seed count, ripple size) | 2 |
 
-Changing `mode` rescatters every pixel on the next frame (a visible jump).
+A list replaces the current one: `?death=orphan,scatter` turns on those two and turns `contagion` off. Changes apply from the next frame without rescattering.
+
+#### `/islands` (old name)
+Kept for clients written against the island-hold experiment. It changes the `/effects` and `/rules` settings and replies like any settings route.
+
+| Option | Values | Effect |
+|---|---|---|
+| `mode` | `off`, `edge`, `orphan` | Sets `ageing` and the `orphan` death effect: `off` neither, `edge` edge only, `orphan` orphan only. Other effects are kept. The old `split` mode was removed and returns `400` |
+| `hold` | `auto` or 0–100 | Same as `/effects?strength=` |
+| `boost` | 0–5 | Same as `/effects?boost=` |
+| `round` | `on` or `off` | Same as `/rules?round=` |
+
+#### Reset routes
+No options. Each puts one group of settings back to its defaults and saves it.
+
+| Route | Defaults |
+|---|---|
+| `/schedule/reset` | `winddown=22:00`, `embers=23:00`, `wake=60`, `golden=60`, `sunrise=0`, `sunset=0` |
+| `/rules/reset` | `mix=pool`, `mixrate=100`, `life=30-100`, `expire=snap`, `round=off` |
+| `/effects/reset` | `ageing=normal`, `death=none`, `island=none`, `strength=auto`, `boost=2`: every effect off |
+| `/islands/reset` | Same as `/effects/reset` |
 
 ### Testing
 

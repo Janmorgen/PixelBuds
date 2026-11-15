@@ -5,7 +5,7 @@
 #include <initializer_list>
 
 #include "daycycle.h"
-#include "islands.h"
+#include "effects.h"
 #include "overrides.h"
 #include "rules.h"
 #include "settings.h"
@@ -121,13 +121,13 @@ static String uptimeText() {
 }
 
 static String statusText() {
-  return dayCycleStatus() + scheduleSettingsStatus() + overridesStatus() + rulesStatus() + islandStatus(currentIslandHold()) +
+  return dayCycleStatus() + scheduleSettingsStatus() + overridesStatus() + rulesStatus() + effectsStatus(currentEffectStrength()) +
          "uptime:      " + uptimeText() + "  build " __DATE__ " " __TIME__ "\n";
 }
 
 static String statusJson() {
   return "{" + dayCycleJson() + "," + scheduleSettingsJson() + "," + overridesJson() + "," + rulesJson() + "," +
-         islandJson(currentIslandHold()) +
+         effectsJson(currentEffectStrength()) +
          ",\"uptimeSeconds\":" + String(millis() / 1000) + ",\"build\":\"" __DATE__ " " __TIME__ "\"}";
 }
 
@@ -175,8 +175,10 @@ static const char HELP_TEXT[] =
   "/rules                ?mix=pool|pair  ?mixrate=0-100  ?life=MIN-MAX (contact frames, 1-2000)\n"
   "                      ?expire=snap|fade  ?round=on|off\n"
   "/rules/reset          back to pool, 100, 30-100, snap, off\n"
-  "/islands              ?mode=off|split|edge|orphan  ?boost=0-5  ?hold=auto|0-100  (?round= still works)\n"
-  "/islands/reset        back to split, boost 2, hold auto\n";
+  "/effects              ?ageing=normal|edge  ?death=none or a list of orphan,contagion,scatter\n"
+  "                      ?island=none or a list of seed,ripple  ?strength=auto|0-100  ?boost=0-5\n"
+  "/effects/reset        back to normal, none, none, auto, 2\n"
+  "/islands              old name: ?mode=off|edge|orphan ?hold= ?boost= ?round= map onto /effects and /rules\n";
 
 // ---------- routes ----------
 
@@ -188,30 +190,59 @@ static void handleStatusJson() {
   web.send(200, "application/json", statusJson());
 }
 
+// Reads ?strength= (or the old ?hold=) into `out`: -1 for auto, else 0-1; leaves it alone if absent.
+static void readStrength(Check& c, const char* name, float& out) {
+  if (!web.hasArg(name)) return;
+  long pct;
+  if (web.arg(name) == "auto") out = -1;
+  else if (parseInt(web.arg(name), 0, 100, pct)) out = pct / 100.0f;
+  else c.fail(String("?") + name + "= takes auto or 0 to 100.");
+}
+
+static void handleEffects() {
+  Check c;
+  allowOnly(c, {"ageing", "death", "island", "strength", "boost"});
+  int ageing = -1, death = -1, island = -1;
+  float boost = -1, strength = -2;
+  if (web.hasArg("ageing") && (ageing = pickName(web.arg("ageing"), ageingNames, 2)) < 0)
+    c.fail("?ageing= takes normal or edge.");
+  if (web.hasArg("death") && !parseEffectList(web.arg("death"), deathEffectNames, DEATH_EFFECT_COUNT, death))
+    c.fail("?death= takes none, or a comma-separated list of orphan, contagion and scatter.");
+  if (web.hasArg("island") && !parseEffectList(web.arg("island"), islandEffectNames, ISLAND_EFFECT_COUNT, island))
+    c.fail("?island= takes none, or a comma-separated list of seed and ripple.");
+  if (web.hasArg("boost") && !parseNumber(web.arg("boost"), 0, 5, boost)) c.fail("?boost= takes 0 to 5.");
+  readStrength(c, "strength", strength);
+  if (rejected(c)) return;
+
+  if (ageing >= 0) effectAgeing = ageing;
+  if (web.hasArg("death")) effectDeath = death;
+  if (web.hasArg("island")) effectIsland = island;
+  if (boost >= 0) effectBoost = boost;
+  if (strength > -2) effectStrengthSetting = strength;
+  settingsSave();
+  sendOk(web.args() ? "Effects saved." : "Effects.");
+}
+
+// The old island-hold route, kept for existing clients: mode sets ageing and orphan, hold is strength.
 static void handleIslands() {
   Check c;
   allowOnly(c, {"mode", "round", "boost", "hold"});
   int mode = -1, round = -1;
-  float boost = -1, hold = -2;
-  if (web.hasArg("mode") && (mode = pickName(web.arg("mode"), islandModeNames, 4)) < 0)
-    c.fail("Unknown mode. Use off, split, edge or orphan.");
+  float boost = -1, strength = -2;
+  if (web.hasArg("mode") && (mode = pickName(web.arg("mode"), islandModeNames, 3)) < 0)
+    c.fail("Unknown mode. Use off, edge or orphan.");
   if (web.hasArg("round") && (round = pickName(web.arg("round"), onOffNames, 2)) < 0)
     c.fail("Unknown rounding. Use on or off.");
   if (web.hasArg("boost") && !parseNumber(web.arg("boost"), 0, 5, boost)) c.fail("?boost= takes 0 to 5.");
-  if (web.hasArg("hold")) {
-    long pct;
-    if (web.arg("hold") == "auto") hold = -1;
-    else if (parseInt(web.arg("hold"), 0, 100, pct)) hold = pct / 100.0f;
-    else c.fail("?hold= takes auto or 0 to 100.");
-  }
+  readStrength(c, "hold", strength);
   if (rejected(c)) return;
 
-  if (mode >= 0) requestIslandMode(mode);
+  if (mode >= 0) applyIslandMode(mode);
   if (round >= 0) ruleRound = round == 1;
-  if (boost >= 0) islandBoost = boost;
-  if (hold > -2) islandHoldSetting = hold;
+  if (boost >= 0) effectBoost = boost;
+  if (strength > -2) effectStrengthSetting = strength;
   settingsSave();
-  sendOk(web.args() ? "Island settings saved." : "Island settings.");
+  sendOk(web.args() ? "Effect settings saved." : "Effect settings.");
 }
 
 static void handleRules() {
@@ -427,7 +458,9 @@ static void webBegin() {
   web.on("/islands", handleIslands);
   web.on("/schedule", handleSchedule);
   web.on("/schedule/reset", []() { if (noOptions()) { resetScheduleSettings(); settingsSave(); rebuildSchedule(); sendOk("Schedule reset to defaults."); } });
-  web.on("/islands/reset", []() { if (noOptions()) { resetIslands(); settingsSave(); sendOk("Island settings reset to defaults."); } });
+  web.on("/effects", handleEffects);
+  web.on("/effects/reset", []() { if (noOptions()) { resetEffects(); settingsSave(); sendOk("Effects reset to defaults."); } });
+  web.on("/islands/reset", []() { if (noOptions()) { resetEffects(); settingsSave(); sendOk("Effects reset to defaults."); } });
   web.on("/rules", handleRules);
   web.on("/rules/reset", []() { if (noOptions()) { resetRules(); settingsSave(); sendOk("Rules reset to defaults."); } });
   web.on("/test", handleTest);

@@ -2,12 +2,13 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <initializer_list>
 
 #include "daycycle.h"
-#include "islands.h"
+#include "effects.h"
 #include "rules.h"
 
-// Keeps the schedule, rule and island settings in NVS across reboots. Overrides are never saved.
+// Keeps the schedule, rule and effect settings in NVS across reboots. Overrides are never saved.
 
 static Preferences prefs;
 
@@ -25,9 +26,11 @@ void settingsLoad() {
   ruleLifeMax = prefs.getInt("lifeMax", ruleLifeMax);
   ruleExpireFade = prefs.getBool("expireFade", ruleExpireFade);
   ruleRound = prefs.getBool("round", ruleRound);
-  islandMode = prefs.getInt("islandMode", islandMode);
-  islandBoost = prefs.getFloat("islandBoost", islandBoost);
-  islandHoldSetting = prefs.getFloat("islandHold", islandHoldSetting);
+  effectAgeing = prefs.getInt("ageing", effectAgeing);
+  effectDeath = prefs.getInt("deathFx", effectDeath);
+  effectIsland = prefs.getInt("islandFx", effectIsland);
+  effectBoost = prefs.getFloat("fxBoost", effectBoost);
+  effectStrengthSetting = prefs.getFloat("fxStrength", effectStrengthSetting);
   prefs.end();
 
   // Anything out of range falls back to its group's defaults.
@@ -36,10 +39,8 @@ void settingsLoad() {
       abs(scheduleSunsetShift) > 180) resetScheduleSettings();
   if (ruleMix < 0 || ruleMix > 1 || ruleMixRate < 0 || ruleMixRate > 100 || ruleLifeMin < 1 ||
       ruleLifeMax > RULE_LIFE_LIMIT || ruleLifeMin > ruleLifeMax) resetRules();
-  if (islandMode < 0 || islandMode > 3 || !(islandBoost >= 0 && islandBoost <= 5) || islandHoldSetting > 1) {
-    resetIslands();
-    islandModeDirty = false;
-  }
+  if (effectAgeing < 0 || effectAgeing > 1 || (effectDeath & ~DEATH_ALL) || (effectIsland & ~ISLAND_ALL) ||
+      !(effectBoost >= 0 && effectBoost <= 5) || effectStrengthSetting > 1) resetEffects();
 }
 
 static void putInt(const char* key, int v) {
@@ -67,8 +68,13 @@ void settingsSave() {
   putInt("lifeMax", ruleLifeMax);
   putBool("expireFade", ruleExpireFade);
   putBool("round", ruleRound);
-  putInt("islandMode", islandMode);
-  putFloat("islandBoost", islandBoost);
-  putFloat("islandHold", islandHoldSetting);
+  putInt("ageing", effectAgeing);
+  putInt("deathFx", effectDeath);
+  putInt("islandFx", effectIsland);
+  putFloat("fxBoost", effectBoost);
+  putFloat("fxStrength", effectStrengthSetting);
+  for (const char* old : {"islandMode", "islandBoost", "islandHold"}) {
+    if (prefs.isKey(old)) prefs.remove(old);
+  }
   prefs.end();
 }
