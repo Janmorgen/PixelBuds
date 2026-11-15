@@ -285,23 +285,59 @@ String dayCycleStatus() {
 
   int n = snprintf(buf, sizeof(buf),
     "PixelBuds\n"
-    "clock:      %s\n"
-    "mode:       %s\n"
-    "light time: %s  phase: %s (%.0f%% of the way to the next keyframe)\n"
-    "sun:        rise %s  set %s%s\n"
-    "look:       brightness %.0f  pixels %d/%.0f  move every %.1f  mix every %.1f  fade %.0f\n"
-    "palette:   ",
+    "clock:       %s\n"
+    "mode:        %s\n"
+    "light time:  %s  phase: %s (%.0f%% of the way to the next keyframe)\n"
+    "sun:         rise %s  set %s%s\n"
+    "look:        brightness %.0f  pixels %d/%.0f  move every %.1f  mix every %.1f  fade %.0f\n"
+    "palette:    ",
     clock, mode, t, activePhase, activeSegT * 100.0f, rise, set, sunFromClock ? "" : " (defaults, no clock yet)",
     activeLook.brightness, reportedPixels, activeLook.pixels, activeLook.moveEvery,
     activeLook.colorEvery, activeLook.fade);
   for (int c = 0; c < PALETTE_SIZE && n < (int)sizeof(buf); c++) {
     n += snprintf(buf + n, sizeof(buf) - n, " %s %.2f", paletteNames[c], activeLook.weights[c]);
   }
-  n += snprintf(buf + n, sizeof(buf) - n, "\nschedule:  ");
+  n += snprintf(buf + n, sizeof(buf) - n, "\nschedule:   ");
   for (int i = 0; i < KEYFRAME_COUNT - 1 && n < (int)sizeof(buf); i++) {
     char k[8];
     formatMinute(k, sizeof(k), schedule[i].minute);
     n += snprintf(buf + n, sizeof(buf) - n, " %s %s%s", k, schedule[i].name, i < KEYFRAME_COUNT - 2 ? " |" : "\n");
   }
+  return String(buf);
+}
+
+// The same facts as dayCycleStatus(), as JSON members (no surrounding braces).
+String dayCycleJson() {
+  char t[8], rise[8], set[8];
+  formatMinute(t, sizeof(t), activeMinute);
+  formatMinute(rise, sizeof(rise), sunriseMinute);
+  formatMinute(set, sizeof(set), sunsetMinute);
+  char clock[40] = "";
+  time_t now = time(nullptr);
+  if (clockIsSet(now)) {
+    struct tm local;
+    localtime_r(&now, &local);
+    strftime(clock, sizeof(clock), "%Y-%m-%dT%H:%M:%S%z", &local);
+  }
+  const char* mode = testHoldMinute >= 0 ? "hold" : testActive ? "test" : activeFromClock ? "schedule" : "fallback";
+
+  char buf[768];
+  int n = snprintf(buf, sizeof(buf),
+    "\"clock\":%s%s%s,\"mode\":\"%s\",\"lightTime\":\"%s\",\"phase\":\"%s\",\"progress\":%.2f,"
+    "\"sun\":{\"rise\":\"%s\",\"set\":\"%s\",\"fromClock\":%s},"
+    "\"look\":{\"brightness\":%.1f,\"pixels\":%.1f,\"pixelsNow\":%d,\"moveEvery\":%.2f,\"mixEvery\":%.2f,\"fade\":%.1f,\"weights\":{",
+    clock[0] ? "\"" : "", clock[0] ? clock : "null", clock[0] ? "\"" : "",
+    mode, t, activePhase, activeSegT, rise, set, sunFromClock ? "true" : "false",
+    activeLook.brightness, activeLook.pixels, reportedPixels, activeLook.moveEvery, activeLook.colorEvery, activeLook.fade);
+  for (int c = 0; c < PALETTE_SIZE && n < (int)sizeof(buf); c++) {
+    n += snprintf(buf + n, sizeof(buf) - n, "%s\"%s\":%.2f", c ? "," : "", paletteNames[c], activeLook.weights[c]);
+  }
+  n += snprintf(buf + n, sizeof(buf) - n, "}},\"schedule\":[");
+  for (int i = 0; i < KEYFRAME_COUNT - 1 && n < (int)sizeof(buf); i++) {
+    char k[8];
+    formatMinute(k, sizeof(k), schedule[i].minute);
+    n += snprintf(buf + n, sizeof(buf) - n, "%s{\"at\":\"%s\",\"phase\":\"%s\"}", i ? "," : "", k, schedule[i].name);
+  }
+  if (n < (int)sizeof(buf)) snprintf(buf + n, sizeof(buf) - n, "]");
   return String(buf);
 }

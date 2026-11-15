@@ -3,14 +3,12 @@
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <FastLED.h>
-#include <WebServer.h>
 #include <WiFi.h>
 
-#include "daycycle.h"
-#include "islands.h"
 #include "secrets.h"
+#include "webapi.h"
 
-// Wi-Fi station connection, network time, wireless flashing (ArduinoOTA) and a plain-text status server.
+// Wi-Fi station connection, network time, wireless flashing (ArduinoOTA) and the HTTP API (webapi.h).
 
 #define PIXELBUDS_HOSTNAME "pixelbuds"
 #define WIFI_RETRY_INTERVAL_MS 30000
@@ -18,51 +16,6 @@
 static uint32_t wifiLastAttempt = 0;
 static bool wifiWasConnected = false;
 static bool otaStarted = false;
-static bool webStarted = false;
-static WebServer web(80);
-
-// Serves status at /, starts a test day at /test (or holds one time with ?hold=), ends it at /test/stop, and switches the island experiment at /islands.
-static void webBegin() {
-  web.on("/", []() { web.send(200, "text/plain", dayCycleStatus() + islandStatus(activeLook.islandHold)); });
-  web.on("/islands", []() {
-    if (web.hasArg("mode") && !requestIslandMode(web.arg("mode"))) {
-      web.send(400, "text/plain", "Unknown mode. Use off, split, edge or orphan.\n");
-      return;
-    }
-    if (web.hasArg("round") && !requestIslandRounding(web.arg("round"))) {
-      web.send(400, "text/plain", "Unknown rounding. Use on or off.\n");
-      return;
-    }
-    if (web.hasArg("mode")) islandMode = islandModeRequested;   // so the reply shows the new mode
-    web.send(200, "text/plain", islandStatus(activeLook.islandHold));
-  });
-  web.on("/test", []() {
-    if (web.hasArg("hold")) {
-      // "day" holds midday; otherwise HH:MM.
-      String h = web.arg("hold");
-      int colon = h.indexOf(':');
-      float minute = h == "day" ? 720 : (colon > 0 ? h.substring(0, colon).toInt() * 60 + h.substring(colon + 1).toInt() : -1);
-      if (minute < 0 || minute >= MINUTES_PER_DAY) {
-        web.send(400, "text/plain", "Use /test?hold=day or /test?hold=HH:MM.\n");
-        return;
-      }
-      startTestHold(minute);
-      dayCycleUpdate();
-      web.send(200, "text/plain", "Holding the light at " + h + " until /test/stop.\n\n" + dayCycleStatus() + islandStatus(activeLook.islandHold));
-      return;
-    }
-    startTestDay();
-    dayCycleUpdate();
-    web.send(200, "text/plain", "Test day started: 05:00 to 05:00 in 24 minutes, one minute per hour.\n\n" + dayCycleStatus());
-  });
-  web.on("/test/stop", []() {
-    stopTestDay();
-    dayCycleUpdate();
-    web.send(200, "text/plain", "Test day stopped.\n\n" + dayCycleStatus());
-  });
-  web.begin();
-  webStarted = true;
-}
 
 // Registers the OTA callbacks and starts listening; needs a live Wi-Fi link.
 static void otaBegin() {

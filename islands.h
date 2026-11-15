@@ -18,34 +18,27 @@
 #define ISLAND_LIFE_BOOST 2.0f   // EDGE lives and ORPHAN bonus lives are (1 + boost * hold) times longer
 
 static int islandMode = ISLANDS_SPLIT;
-static int islandModeRequested = ISLANDS_SPLIT;
 static bool islandModeDirty = false;
 static bool islandRounding = false;   // round colour mixes for EDGE/ORPHAN: brighter but paler islands
 
 static const char* const islandModeNames[] = {"off", "split", "edge", "orphan"};
 
-// Asks the main loop to switch modes; returns false for an unknown name.
-static bool requestIslandMode(const String& name) {
-  for (int i = 0; i < 4; i++) {
-    if (name == islandModeNames[i]) {
-      islandModeRequested = i;
-      islandModeDirty = true;
-      return true;
-    }
-  }
-  return false;
+static const char* const onOffNames[] = {"off", "on"};
+
+// Asks the main loop to switch to mode `mode`; the reply already shows it.
+static void requestIslandMode(int mode) {
+  islandMode = mode;
+  islandModeDirty = true;
 }
 
-// Sets colour-mix rounding from "on"/"off"; returns false for anything else.
-static bool requestIslandRounding(const String& value) {
-  if (value != "on" && value != "off") return false;
-  islandRounding = value == "on";
-  return true;
-}
-
+// One status line for the experiment.
 static String islandStatus(float hold) {
   const char* layout = islandMode == ISLANDS_SPLIT ? " (left half edge, right half orphan)" : "";
-  return String("islands:    ") + islandModeNames[islandMode] + layout + "  hold " + String(hold, 2) +
-         "  rounding " + (islandRounding ? "on" : "off") +
-         "\n            switch with /islands?mode=off|split|edge|orphan and /islands?round=on|off\n";
+  return String("islands:     ") + islandModeNames[islandMode] + layout + "  hold " + String(hold, 2) +
+         "  rounding " + (islandRounding ? "on" : "off") + "\n";
+}
+
+static String islandJson(float hold) {
+  return String("\"islands\":{\"mode\":\"") + islandModeNames[islandMode] + "\",\"hold\":" + String(hold, 2) +
+         ",\"rounding\":" + (islandRounding ? "true" : "false") + "}";
 }

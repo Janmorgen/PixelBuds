@@ -429,7 +429,6 @@ int nextIslandVariant() {
 // Switches the island experiment and reshuffles every pixel into a fresh layout for the new mode.
 void applyIslandMode() {
   islandModeDirty = false;
-  islandMode = islandModeRequested;
   initAvailableIndicies();
   FastLED.clear();
   for (size_t i = 0; i < pixels.size(); i++) {
