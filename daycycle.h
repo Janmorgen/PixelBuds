@@ -10,10 +10,7 @@
 
 // Time-of-day looks for the pixel simulation, anchored to local sunrise and sunset.
 
-#define WAKE_RAMP_MINUTES  60
-#define GOLDEN_MINUTES     60
-#define WIND_DOWN_MINUTE   (22 * 60)
-#define EMBERS_MINUTE      (23 * 60)
+#define EVENING_MIN_MINUTES 60      // wind-down moves later rather than squeeze the evening below this
 #define TEST_START_MINUTE  (5 * 60)
 #define TEST_MS_PER_MINUTE 1000UL      // one real minute plays one hour
 #define MINUTES_PER_DAY    1440
@@ -40,6 +37,11 @@ static const Look LOOK_GOLDEN  = { 70, {1.0f, 0.6f, 0.0f, 0.8f}, 24, 2, 1, 40, 0
 static const Look LOOK_EVENING = { 40, {1.0f, 0.3f, 0.0f, 1.0f}, 18, 3, 2, 28, 0};
 static const Look LOOK_EMBERS  = { 10, {1.0f, 0.0f, 0.0f, 0.4f},  6, 6, 3, 16, 0};
 
+#define LOOK_COUNT 4
+static const Look* const looks[LOOK_COUNT] = {&LOOK_DAY, &LOOK_GOLDEN, &LOOK_EVENING, &LOOK_EMBERS};
+static const char* const lookNames[LOOK_COUNT] = {"day", "golden", "evening", "embers"};
+static const char* const lookPhases[LOOK_COUNT] = {"day", "golden hour", "evening", "embers"};
+
 // A look pinned to a minute of the day; name labels the stretch that starts there.
 struct Keyframe {
   float minute;
@@ -53,10 +55,29 @@ static float sunriseMinute = 6 * 60;
 static float sunsetMinute = 18 * 60;
 static bool sunFromClock = false;
 static int scheduleYearDay = -1;
+static int scheduleUtcOffset = 0;   // minutes; a change (daylight saving) rebuilds the schedule
+
+// Schedule settings, set at /schedule and saved by settings.h.
+#define SCHEDULE_WIND_DOWN_DEFAULT (22 * 60)
+#define SCHEDULE_EMBERS_DEFAULT    (23 * 60)
+#define SCHEDULE_WAKE_DEFAULT      60
+#define SCHEDULE_GOLDEN_DEFAULT    60
+static int scheduleWindDown = SCHEDULE_WIND_DOWN_DEFAULT;   // minute wind-down starts
+static int scheduleEmbers = SCHEDULE_EMBERS_DEFAULT;        // minute embers starts
+static int scheduleWake = SCHEDULE_WAKE_DEFAULT;            // minutes from sunrise to the full day look
+static int scheduleGolden = SCHEDULE_GOLDEN_DEFAULT;        // minutes of golden hour either side of sunset
+static int scheduleSunriseShift = 0;                        // minutes added to sunrise
+static int scheduleSunsetShift = 0;                         // minutes added to sunset
 
 static bool testActive = false;
 static uint32_t testStartMs = 0;
 static float testHoldMinute = -1;   // >= 0 pins the light clock to this minute until stopped
+static int testHoldLook = -1;       // >= 0 shows looks[testHoldLook] until stopped
+static uint32_t testHoldEndMs = 0;  // when a hold ends by itself; 0 = never
+static float skipMinute = -1;       // >= 0: light clock jumped ahead to this keyframe until the wall clock reaches it
+static uint32_t skipEndMs = 0;
+static int skipLook = -1;           // index into looks[] of the look skipped to
+static float colourOverride[PALETTE_SIZE] = {-1, -1, -1, -1};   // >= 0 replaces the look's spawn weight, 0-1
 
 static Look activeLook = LOOK_DAY;
 // The stretch between two keyframes that the clock is in, with linear progress 0-1 across it.
@@ -85,12 +106,17 @@ static bool sunTimesUtc(int dayOfYear, double lat, double lon, double& riseUtc, 
   return true;
 }
 
-// Rebuilds the keyframes around the given sunrise and sunset; sun-anchored frames never pass the wind-down.
+// Rebuilds the keyframes around the given sunrise and sunset. A late sunset pushes wind-down and embers
+// later so the evening keeps at least EVENING_MIN_MINUTES; nothing passes the end of the day.
 static void buildSchedule(float rise, float set) {
-  float dayStart = rise + WAKE_RAMP_MINUTES;
-  float goldenStart = min(set - GOLDEN_MINUTES, (float)WIND_DOWN_MINUTE);
-  float sunset = min(set, (float)WIND_DOWN_MINUTE);
-  float evening = min(set + GOLDEN_MINUTES, (float)WIND_DOWN_MINUTE);
+  rise += scheduleSunriseShift;
+  set += scheduleSunsetShift;
+  float dayStart = rise + scheduleWake;
+  float goldenStart = set - scheduleGolden;
+  float sunset = set;
+  float evening = set + scheduleGolden;
+  float windDown = max((float)scheduleWindDown, evening + EVENING_MIN_MINUTES);
+  float embers = max((float)scheduleEmbers, windDown + (scheduleEmbers - scheduleWindDown));
 
   Keyframe frames[KEYFRAME_COUNT] = {
     {0,                        &LOOK_EMBERS,  "embers"},
@@ -99,24 +125,37 @@ static void buildSchedule(float rise, float set) {
     {goldenStart,              &LOOK_DAY,     "golden hour"},
     {sunset,                   &LOOK_GOLDEN,  "golden hour"},
     {evening,                  &LOOK_EVENING, "evening"},
-    {WIND_DOWN_MINUTE,         &LOOK_EVENING, "wind-down"},
-    {EMBERS_MINUTE,            &LOOK_EMBERS,  "embers"},
+    {windDown,                 &LOOK_EVENING, "wind-down"},
+    {embers,                   &LOOK_EMBERS,  "embers"},
     {MINUTES_PER_DAY,          &LOOK_EMBERS,  "embers"},
   };
-  for (int i = 1; i < KEYFRAME_COUNT; i++) {
-    if (frames[i].minute < frames[i - 1].minute) frames[i].minute = frames[i - 1].minute;
+  for (int i = 1; i < KEYFRAME_COUNT - 1; i++) {
+    frames[i].minute = constrain(frames[i].minute, frames[i - 1].minute, (float)MINUTES_PER_DAY - 1);
   }
   memcpy(schedule, frames, sizeof(frames));
 }
 
-// Recomputes today's sun times from the local date and UTC offset at `now`.
-static void refreshSun(time_t now) {
+// True once SNTP has set the wall clock.
+static bool clockIsSet(time_t now) {
+  return now > 1700000000;
+}
+
+// Local time minus UTC at `now`, in minutes.
+static int utcOffsetMinutes(time_t now) {
   struct tm local, utc;
   localtime_r(&now, &local);
   gmtime_r(&now, &utc);
   int offset = (local.tm_hour * 60 + local.tm_min) - (utc.tm_hour * 60 + utc.tm_min);
   if (offset > 720) offset -= MINUTES_PER_DAY;
   if (offset <= -720) offset += MINUTES_PER_DAY;
+  return offset;
+}
+
+// Recomputes today's sun times from the local date and UTC offset at `now`.
+static void refreshSun(time_t now) {
+  struct tm local;
+  localtime_r(&now, &local);
+  int offset = utcOffsetMinutes(now);
 
   double riseUtc, setUtc;
   if (sunTimesUtc(local.tm_yday + 1, LATITUDE, LONGITUDE, riseUtc, setUtc)) {
@@ -126,6 +165,22 @@ static void refreshSun(time_t now) {
   }
   buildSchedule(sunriseMinute, sunsetMinute);
   scheduleYearDay = local.tm_yday;
+  scheduleUtcOffset = offset;
+}
+
+// Rebuilds the schedule after a settings change.
+void rebuildSchedule() {
+  time_t now = time(nullptr);
+  if (clockIsSet(now)) refreshSun(now);
+  else buildSchedule(sunriseMinute, sunsetMinute);
+}
+
+void resetScheduleSettings() {
+  scheduleWindDown = SCHEDULE_WIND_DOWN_DEFAULT;
+  scheduleEmbers = SCHEDULE_EMBERS_DEFAULT;
+  scheduleWake = SCHEDULE_WAKE_DEFAULT;
+  scheduleGolden = SCHEDULE_GOLDEN_DEFAULT;
+  scheduleSunriseShift = scheduleSunsetShift = 0;
 }
 
 // Blends the looks either side of `minute`, eased so each stretch starts and ends gently.
@@ -159,27 +214,86 @@ static Look lookAt(float minute, const char** phase) {
   return out;
 }
 
-// True once SNTP has set the wall clock.
-static bool clockIsSet(time_t now) {
-  return now > 1700000000;
-}
-
 // Starts a 24-minute test day at 05:00 using today's sun times.
 void startTestDay() {
   testHoldMinute = -1;
+  testHoldLook = -1;
   testActive = true;
   testStartMs = millis();
 }
 
-// Pins the light clock to one minute of the day until stopTestDay().
-void startTestHold(float minute) {
+// Pins the light to one minute of the day, or to one look when minute < 0; forMs 0 holds until stopTestDay().
+void startTestHold(float minute, int look, uint32_t forMs) {
   testActive = false;
   testHoldMinute = minute;
+  testHoldLook = minute >= 0 ? -1 : look;
+  testHoldEndMs = forMs ? max(millis() + forMs, (uint32_t)1) : 0;
 }
 
 void stopTestDay() {
   testActive = false;
   testHoldMinute = -1;
+  testHoldLook = -1;
+  testHoldEndMs = 0;
+}
+
+static bool holdActive() {
+  return testHoldMinute >= 0 || testHoldLook >= 0;
+}
+
+// Local wall-clock minute of the day.
+static float wallMinute(time_t now) {
+  struct tm local;
+  localtime_r(&now, &local);
+  return local.tm_hour * 60 + local.tm_min + local.tm_sec / 60.0f;
+}
+
+// Next schedule keyframe index after k, skipping the end-of-day duplicate of midnight.
+static int nextKeyframe(int k) {
+  return k + 1 >= KEYFRAME_COUNT - 1 ? 0 : k + 1;
+}
+
+// Jumps the light clock to where the next look begins and keeps it there until the wall clock catches up.
+// Fails during a test day or hold, or before the clock is set; on success names the look reached.
+bool skipToNextLook(const char** lookName, float* atMinute) {
+  time_t now = time(nullptr);
+  if (testActive || holdActive() || !clockIsSet(now) || activeSegIndex < 0) return false;
+  float wall = wallMinute(now);
+  int k = activeSegIndex;
+  const Look* current = schedule[k].look;
+  for (int step = 0; step < 2 * KEYFRAME_COUNT; step++) {
+    k = nextKeyframe(k);
+    if (schedule[k].look == current) continue;
+    float ahead = fmod(schedule[k].minute - wall + 2 * MINUTES_PER_DAY, (float)MINUTES_PER_DAY);
+    if (ahead < 1.0f) { current = schedule[k].look; continue; }
+    skipMinute = schedule[k].minute;
+    skipEndMs = max(millis() + (uint32_t)(ahead * 60000.0f), (uint32_t)1);
+    for (int i = 0; i < LOOK_COUNT; i++) if (looks[i] == schedule[k].look) skipLook = i;
+    *lookName = lookNames[skipLook];
+    *atMinute = skipMinute;
+    return true;
+  }
+  return false;
+}
+
+void cancelSkip() {
+  skipMinute = -1;
+  skipEndMs = 0;
+}
+
+// The next stretch with a different name than the current one, from the light clock; false during a look hold.
+bool nextPhaseChange(const char** name, float* atMinute) {
+  if (activeSegIndex < 0) return false;
+  int k = activeSegIndex;
+  for (int step = 0; step < 2 * KEYFRAME_COUNT; step++) {
+    k = nextKeyframe(k);
+    if (strcmp(schedule[k].name, activePhase) != 0) {
+      *name = schedule[k].name;
+      *atMinute = schedule[k].minute;
+      return true;
+    }
+  }
+  return false;
 }
 
 // Updates and returns the look for this frame: test clock, wall clock, or the day look until the clock is set.
@@ -189,14 +303,23 @@ const Look& dayCycleUpdate() {
   if (clockSet) {
     struct tm local;
     localtime_r(&now, &local);
-    if (local.tm_yday != scheduleYearDay) refreshSun(now);
+    if (local.tm_yday != scheduleYearDay || utcOffsetMinutes(now) != scheduleUtcOffset) refreshSun(now);
   } else if (scheduleYearDay == -1 && schedule[KEYFRAME_COUNT - 1].minute == 0) {
     buildSchedule(sunriseMinute, sunsetMinute);
   }
 
   if (testActive && millis() - testStartMs >= MINUTES_PER_DAY * TEST_MS_PER_MINUTE) testActive = false;
+  if (testHoldEndMs && (int32_t)(millis() - testHoldEndMs) >= 0) stopTestDay();
+  if (skipEndMs && (int32_t)(millis() - skipEndMs) >= 0) cancelSkip();
 
-  if (testHoldMinute >= 0) {
+  if (testHoldLook >= 0) {
+    activeLook = *looks[testHoldLook];
+    activeSegIndex = -10 - testHoldLook;
+    activeSegT = 1.0f;
+    activeSegFrom = activeSegTo = looks[testHoldLook];
+    activePhase = lookPhases[testHoldLook];
+    activeFromClock = clockSet;
+  } else if (testHoldMinute >= 0) {
     activeMinute = testHoldMinute;
     activeLook = lookAt(activeMinute, &activePhase);
     activeFromClock = clockSet;
@@ -206,9 +329,7 @@ const Look& dayCycleUpdate() {
     activeLook = lookAt(activeMinute, &activePhase);
     activeFromClock = clockSet;
   } else if (clockSet) {
-    struct tm local;
-    localtime_r(&now, &local);
-    activeMinute = local.tm_hour * 60 + local.tm_min + local.tm_sec / 60.0f;
+    activeMinute = skipMinute >= 0 ? skipMinute : wallMinute(now);
     activeLook = lookAt(activeMinute, &activePhase);
     activeFromClock = true;
   } else {
@@ -237,6 +358,7 @@ int pickSpawnIndex() {
 
 // Intensity (0-1) for a palette colour: ramps linearly across the current transition to match the next phase.
 float colourLevel(int index) {
+  if (colourOverride[index] >= 0) return colourOverride[index] > 0 ? 1.0f : 0.0f;
   float from = activeSegFrom->weights[index] > 0.0f ? 1.0f : 0.0f;
   float to = activeSegTo->weights[index] > 0.0f ? 1.0f : 0.0f;
   return from + (to - from) * activeSegT;
@@ -244,6 +366,7 @@ float colourLevel(int index) {
 
 // True when neither end of the current transition uses this palette colour.
 bool colourAbsent(int index) {
+  if (colourOverride[index] >= 0) return colourOverride[index] == 0;
   return activeSegFrom->weights[index] <= 0.0f && activeSegTo->weights[index] <= 0.0f;
 }
 
@@ -261,6 +384,7 @@ String dayCycleStatus() {
   char buf[1024];
   char t[8], rise[8], set[8];
   formatMinute(t, sizeof(t), activeMinute);
+  if (testHoldLook >= 0) strcpy(t, "--:--");
   formatMinute(rise, sizeof(rise), sunriseMinute);
   formatMinute(set, sizeof(set), sunsetMinute);
 
@@ -272,9 +396,14 @@ String dayCycleStatus() {
     strftime(clock, sizeof(clock), "%Y-%m-%d %H:%M:%S %Z", &local);
   }
 
-  char mode[64];
-  if (testHoldMinute >= 0) {
-    snprintf(mode, sizeof(mode), "test hold (until /test/stop)");
+  char mode[64], until[24] = "until /test/stop";
+  if (testHoldEndMs) snprintf(until, sizeof(until), "%lu min left", (unsigned long)((testHoldEndMs - millis() + 59999) / 60000));
+  if (testHoldLook >= 0) {
+    snprintf(mode, sizeof(mode), "holding the %s look (%s)", lookNames[testHoldLook], until);
+  } else if (testHoldMinute >= 0) {
+    snprintf(mode, sizeof(mode), "holding %s (%s)", t, until);
+  } else if (skipMinute >= 0) {
+    snprintf(mode, sizeof(mode), "skipped ahead to the %s look; the schedule catches up at %s", lookNames[skipLook], t);
   } else if (testActive) {
     uint32_t elapsed = (millis() - testStartMs) / 1000;
     uint32_t left = MINUTES_PER_DAY * TEST_MS_PER_MINUTE / 1000 - elapsed;
@@ -285,23 +414,98 @@ String dayCycleStatus() {
 
   int n = snprintf(buf, sizeof(buf),
     "PixelBuds\n"
-    "clock:      %s\n"
-    "mode:       %s\n"
-    "light time: %s  phase: %s (%.0f%% of the way to the next keyframe)\n"
-    "sun:        rise %s  set %s%s\n"
-    "look:       brightness %.0f  pixels %d/%.0f  move every %.1f  mix every %.1f  fade %.0f\n"
-    "palette:   ",
+    "clock:       %s\n"
+    "mode:        %s\n"
+    "light time:  %s  phase: %s (%.0f%% of the way to the next keyframe)\n"
+    "sun:         rise %s  set %s%s\n"
+    "look:        brightness %.0f  pixels %d/%.0f  move every %.1f  mix every %.1f  fade %.0f\n"
+    "palette:    ",
     clock, mode, t, activePhase, activeSegT * 100.0f, rise, set, sunFromClock ? "" : " (defaults, no clock yet)",
     activeLook.brightness, reportedPixels, activeLook.pixels, activeLook.moveEvery,
     activeLook.colorEvery, activeLook.fade);
   for (int c = 0; c < PALETTE_SIZE && n < (int)sizeof(buf); c++) {
     n += snprintf(buf + n, sizeof(buf) - n, " %s %.2f", paletteNames[c], activeLook.weights[c]);
   }
-  n += snprintf(buf + n, sizeof(buf) - n, "\nschedule:  ");
+  n += snprintf(buf + n, sizeof(buf) - n, "\nschedule:   ");
   for (int i = 0; i < KEYFRAME_COUNT - 1 && n < (int)sizeof(buf); i++) {
     char k[8];
     formatMinute(k, sizeof(k), schedule[i].minute);
     n += snprintf(buf + n, sizeof(buf) - n, " %s %s%s", k, schedule[i].name, i < KEYFRAME_COUNT - 2 ? " |" : "\n");
   }
+  return String(buf);
+}
+
+// The same facts as dayCycleStatus(), as JSON members (no surrounding braces).
+String dayCycleJson() {
+  char t[8], rise[8], set[8];
+  formatMinute(t, sizeof(t), activeMinute);
+  formatMinute(rise, sizeof(rise), sunriseMinute);
+  formatMinute(set, sizeof(set), sunsetMinute);
+  char clock[40] = "";
+  time_t now = time(nullptr);
+  if (clockIsSet(now)) {
+    struct tm local;
+    localtime_r(&now, &local);
+    strftime(clock, sizeof(clock), "%Y-%m-%dT%H:%M:%S%z", &local);
+  }
+  const char* mode = holdActive() ? "hold" : testActive ? "test" : skipMinute >= 0 ? "skipped" : activeFromClock ? "schedule" : "fallback";
+
+  // Hold, test-day and skip details; null when not active.
+  char hold[96] = "null", test[40] = "null", skip[96] = "null", left[16] = "null";
+  if (testHoldEndMs) snprintf(left, sizeof(left), "%lu", (unsigned long)((testHoldEndMs - millis()) / 1000));
+  if (testHoldLook >= 0) {
+    snprintf(hold, sizeof(hold), "{\"look\":\"%s\",\"time\":null,\"secondsLeft\":%s}", lookNames[testHoldLook], left);
+  } else if (testHoldMinute >= 0) {
+    snprintf(hold, sizeof(hold), "{\"look\":null,\"time\":\"%s\",\"secondsLeft\":%s}", t, left);
+  }
+  if (testActive) {
+    uint32_t elapsed = millis() - testStartMs;
+    snprintf(test, sizeof(test), "{\"secondsLeft\":%lu}", (unsigned long)((MINUTES_PER_DAY * TEST_MS_PER_MINUTE - elapsed) / 1000));
+  }
+  if (skipMinute >= 0) {
+    snprintf(skip, sizeof(skip), "{\"look\":\"%s\",\"catchUpAt\":\"%s\",\"secondsLeft\":%lu}", lookNames[skipLook], t,
+             (unsigned long)((skipEndMs - millis()) / 1000));
+  }
+  char lightTime[10];
+  snprintf(lightTime, sizeof(lightTime), testHoldLook >= 0 ? "null" : "\"%s\"", t);
+
+  char buf[1024];
+  int n = snprintf(buf, sizeof(buf),
+    "\"clock\":%s%s%s,\"mode\":\"%s\",\"hold\":%s,\"testDay\":%s,\"skip\":%s,\"lightTime\":%s,\"phase\":\"%s\",\"progress\":%.2f,"
+    "\"sun\":{\"rise\":\"%s\",\"set\":\"%s\",\"fromClock\":%s},"
+    "\"look\":{\"brightness\":%.1f,\"pixels\":%.1f,\"pixelsNow\":%d,\"moveEvery\":%.2f,\"mixEvery\":%.2f,\"fade\":%.1f,\"weights\":{",
+    clock[0] ? "\"" : "", clock[0] ? clock : "null", clock[0] ? "\"" : "",
+    mode, hold, test, skip, lightTime, activePhase, activeSegT, rise, set, sunFromClock ? "true" : "false",
+    activeLook.brightness, activeLook.pixels, reportedPixels, activeLook.moveEvery, activeLook.colorEvery, activeLook.fade);
+  for (int c = 0; c < PALETTE_SIZE && n < (int)sizeof(buf); c++) {
+    n += snprintf(buf + n, sizeof(buf) - n, "%s\"%s\":%.2f", c ? "," : "", paletteNames[c], activeLook.weights[c]);
+  }
+  n += snprintf(buf + n, sizeof(buf) - n, "}},\"schedule\":[");
+  for (int i = 0; i < KEYFRAME_COUNT - 1 && n < (int)sizeof(buf); i++) {
+    char k[8];
+    formatMinute(k, sizeof(k), schedule[i].minute);
+    n += snprintf(buf + n, sizeof(buf) - n, "%s{\"at\":\"%s\",\"phase\":\"%s\"}", i ? "," : "", k, schedule[i].name);
+  }
+  if (n < (int)sizeof(buf)) snprintf(buf + n, sizeof(buf) - n, "]");
+  return String(buf);
+}
+
+// The schedule settings, one status line.
+String scheduleSettingsStatus() {
+  char buf[160], wd[8], em[8];
+  formatMinute(wd, sizeof(wd), scheduleWindDown);
+  formatMinute(em, sizeof(em), scheduleEmbers);
+  snprintf(buf, sizeof(buf), "settings:    wind-down %s  embers %s  wake %d min  golden %d min  sunrise %+d  sunset %+d\n",
+           wd, em, scheduleWake, scheduleGolden, scheduleSunriseShift, scheduleSunsetShift);
+  return String(buf);
+}
+
+String scheduleSettingsJson() {
+  char buf[200], wd[8], em[8];
+  formatMinute(wd, sizeof(wd), scheduleWindDown);
+  formatMinute(em, sizeof(em), scheduleEmbers);
+  snprintf(buf, sizeof(buf),
+           "\"scheduleSettings\":{\"winddown\":\"%s\",\"embers\":\"%s\",\"wake\":%d,\"golden\":%d,\"sunrise\":%d,\"sunset\":%d}",
+           wd, em, scheduleWake, scheduleGolden, scheduleSunriseShift, scheduleSunsetShift);
   return String(buf);
 }

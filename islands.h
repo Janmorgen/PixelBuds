@@ -15,37 +15,40 @@
 #define ISLANDS_EDGE   2
 #define ISLANDS_ORPHAN 3
 
-#define ISLAND_LIFE_BOOST 2.0f   // EDGE lives and ORPHAN bonus lives are (1 + boost * hold) times longer
+#define ISLAND_BOOST_DEFAULT 2.0f
 
 static int islandMode = ISLANDS_SPLIT;
-static int islandModeRequested = ISLANDS_SPLIT;
 static bool islandModeDirty = false;
-static bool islandRounding = false;   // round colour mixes for EDGE/ORPHAN: brighter but paler islands
+static float islandBoost = ISLAND_BOOST_DEFAULT;   // EDGE lives and ORPHAN bonus lives are (1 + boost * hold) times longer
+static float islandHoldSetting = -1;               // < 0: hold follows the look (day only); else fixed 0-1
 
 static const char* const islandModeNames[] = {"off", "split", "edge", "orphan"};
 
-// Asks the main loop to switch modes; returns false for an unknown name.
-static bool requestIslandMode(const String& name) {
-  for (int i = 0; i < 4; i++) {
-    if (name == islandModeNames[i]) {
-      islandModeRequested = i;
-      islandModeDirty = true;
-      return true;
-    }
-  }
-  return false;
+static const char* const onOffNames[] = {"off", "on"};
+
+void resetIslands() {
+  islandMode = ISLANDS_SPLIT;
+  islandModeDirty = true;
+  islandBoost = ISLAND_BOOST_DEFAULT;
+  islandHoldSetting = -1;
 }
 
-// Sets colour-mix rounding from "on"/"off"; returns false for anything else.
-static bool requestIslandRounding(const String& value) {
-  if (value != "on" && value != "off") return false;
-  islandRounding = value == "on";
-  return true;
+// Asks the main loop to switch to mode `mode`; the reply already shows it.
+static void requestIslandMode(int mode) {
+  islandMode = mode;
+  islandModeDirty = true;
 }
 
+// One status line for the experiment.
 static String islandStatus(float hold) {
   const char* layout = islandMode == ISLANDS_SPLIT ? " (left half edge, right half orphan)" : "";
-  return String("islands:    ") + islandModeNames[islandMode] + layout + "  hold " + String(hold, 2) +
-         "  rounding " + (islandRounding ? "on" : "off") +
-         "\n            switch with /islands?mode=off|split|edge|orphan and /islands?round=on|off\n";
+  String setting = islandHoldSetting < 0 ? String(" (auto)") : String(" (fixed)");
+  return String("islands:     ") + islandModeNames[islandMode] + layout + "  hold " + String(hold, 2) + setting +
+         "  boost " + String(islandBoost, 1) + "\n";
+}
+
+static String islandJson(float hold) {
+  return String("\"islands\":{\"mode\":\"") + islandModeNames[islandMode] + "\",\"hold\":" + String(hold, 2) +
+         ",\"holdSetting\":" + (islandHoldSetting < 0 ? String("\"auto\"") : String(lroundf(islandHoldSetting * 100))) +
+         ",\"boost\":" + String(islandBoost, 1) + "}";
 }
