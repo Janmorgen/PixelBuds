@@ -2,6 +2,7 @@
 #include <ArxContainer.h>
 #include "network.h"
 #include "islands.h"
+#include "rules.h"
 
 #define RGB_PIN         26     // LED data pin
 #define RGB_LED_NUM     256    // 32x8 serpentine matrix
@@ -106,6 +107,7 @@ class pixel {
     std::vector<pixel*> getNeighbors();
     void splitColors(CRGB A, std::vector<pixel*>& neighbors);
     void averageColors(std::vector<pixel*> & neighbors);
+    void pairColors(std::vector<pixel*>& neighbors);
 
 
     CRGB color = CRGB(0, 0, 0);
@@ -123,6 +125,7 @@ class pixel {
     int framesSinceMove = 1000;
     float presence = 1.0f;       // display intensity, 0-1
     bool fadingOut = false;
+    bool respawn = false;        // fading out at the end of its life, then respawning in place
     int role = 0;                // ROLE_CORE, ROLE_ARRIVING or ROLE_LEAVING
     int variant = VARIANT_TODAY; // island-hold behaviour, see islands.h
     void expire();
@@ -168,13 +171,14 @@ void pixel::randomize() {
 
 
 
-  this->lifeTime = random(30, 100);
+  this->lifeTime = ruleLifeTime();
   this->spawnIndex = pickSpawnIndex();
   this->color = paletteColors[this->spawnIndex];
   this->turnsLived = 0;
   this->shareTo = true;
   this->framesSinceMove = 0;
   this->fadingOut = false;
+  this->respawn = false;
   this->presence = this->presenceTarget();
 
 
@@ -184,6 +188,7 @@ bool pixel::dark() {
 }
 // Returns true once the pixel has gone dark; otherwise ages it while it touches another pixel.
 // EDGE pixels age slower by day, and slower still with more neighbours, so islands wear from the outside.
+// With expire=fade, a pixel whose life runs out fades away before respawning.
 bool pixel::age(int contacts) {
   if (this->dark()) return true;
 
@@ -191,10 +196,14 @@ bool pixel::age(int contacts) {
     float step = 1.0f;
     if (this->variant == VARIANT_EDGE) {
       float hold = activeLook.islandHold;
-      step = 1.0f / ((1.0f + ISLAND_LIFE_BOOST * hold) * (1.0f + (contacts - 1) * hold));
+      step = 1.0f / ((1.0f + islandBoost * hold) * (1.0f + (contacts - 1) * hold));
     }
     this->turnsLived += step;
     this->shareTo = !(this->turnsLived > this->lifeTime);
+    if (!this->shareTo && ruleExpireFade && !this->fadingOut) {
+      this->fadingOut = true;
+      this->respawn = true;
+    }
   }
   return false;
 }
@@ -219,7 +228,7 @@ void pixel::rewardOrphans(std::vector<pixel*>& neighbors) {
       if (other != this && !other->dark()) others++;
     }
     if (others > 0) continue;
-    int bonusLife = (int)lroundf(random(30, 100) * (1.0f + ISLAND_LIFE_BOOST * hold));
+    int bonusLife = (int)lroundf(ruleLifeTime() * (1.0f + islandBoost * hold));
     nb->turnsLived *= 1.0f - hold;
     nb->lifeTime = max(nb->lifeTime, (int)lroundf(nb->lifeTime + hold * (bonusLife - nb->lifeTime)));
     nb->shareTo = nb->turnsLived <= nb->lifeTime;
@@ -230,6 +239,7 @@ void pixel::expire() {
   this->turnsLived = this->lifeTime + 1;
   this->shareTo = false;
   this->fadingOut = true;
+  this->respawn = false;
 }
 // Removes the pixel at once and frees its cell.
 void pixel::retire() {
@@ -252,7 +262,7 @@ float pixel::presenceTarget() {
 // Moves the display intensity toward its target, never faster than the fallback fade; a faded-out pixel goes dark.
 void pixel::updatePresence() {
   float target = this->fadingOut ? 0.0f : this->presenceTarget();
-  float step = 1.0f / PRESENCE_FADE_FRAMES;
+  float step = 1.0f / (this->respawn ? DEATH_FADE_FRAMES : PRESENCE_FADE_FRAMES);
   if (this->presence < target) this->presence = min(this->presence + step, target);
   else this->presence = max(this->presence - step, target);
   if (this->fadingOut && this->presence <= 0.0f) this->color = CRGB(0, 0, 0);
@@ -295,8 +305,9 @@ void pixel::splitColors(CRGB A, std::vector<pixel*>& neighbors) {
   float tempCalc[3] = {(float)A[0], (float)A[1], (float)A[2]};
   float shareToSize = this->shareTo ? 1.0f : 0.0f;
 
-  // Neighbours count in proportion to how visible they are.
+  // Neighbours count in proportion to how visible they are; fading ones have stopped sharing.
   for (pixel* neighbor : neighbors) {
+    if (neighbor->fadingOut) continue;
     for (int i = 0; i < 3; i++) {
       tempCalc[i] += neighbor->color[i] * neighbor->presence;
     }
@@ -304,19 +315,38 @@ void pixel::splitColors(CRGB A, std::vector<pixel*>& neighbors) {
   }
   if (shareToSize <= 0.0f) return;
   shareToSize = max(shareToSize, 1.0f);
-
-  CRGB output(0, 0, 0);
-  for (int i = 0; i < 3; i++) {
-    // Optional rounding keeps long-lived islands bright but lets them pale; truncating keeps them saturated.
-    float bias = (this->variant != VARIANT_TODAY && islandRounding) ? 0.5f : 0.0f;
-    output[i] = (uint8_t)min(tempCalc[i] / shareToSize + bias, 255.0f);
+  if (!this->shareTo) {
+    this->color = CRGB(0, 0, 0);
+    return;
   }
-  this->color = this->shareTo ? output : CRGB(0, 0, 0);
+
+  // Moves mixrate of the way to the pooled colour; rounding keeps colours bright but lets them pale.
+  float rate = ruleMixRate / 100.0f;
+  float bias = ruleRound ? 0.5f : 0.0f;
+  for (int i = 0; i < 3; i++) {
+    float pooled = tempCalc[i] / shareToSize;
+    this->color[i] = (uint8_t)constrain(this->color[i] + (pooled - this->color[i]) * rate + bias, 0.0f, 255.0f);
+  }
 }
 
-// Pools colours with the neighbours.
+// Averages with each neighbour in turn and writes the result into both.
+void pixel::pairColors(std::vector<pixel*>& neighbors) {
+  float rate = ruleMixRate / 100.0f;
+  float bias = ruleRound ? 0.5f : 0.0f;
+  for (pixel* px : neighbors) {
+    if (px->fadingOut) continue;
+    for (int i = 0; i < 3; i++) {
+      float average = (px->color[i] + this->color[i]) / 2.0f;
+      px->color[i] = (uint8_t)constrain(px->color[i] + (average - px->color[i]) * rate + bias, 0.0f, 255.0f);
+      this->color[i] = (uint8_t)constrain(this->color[i] + (average - this->color[i]) * rate + bias, 0.0f, 255.0f);
+    }
+  }
+}
+
+// Mixes colours with the neighbours using the mix rule.
 void pixel::averageColors(std::vector<pixel*> & neighbors) {
-  splitColors(this->color, neighbors);
+  if (ruleMix == MIX_PAIR) pairColors(neighbors);
+  else splitColors(this->color, neighbors);
 }
 
 void pixel::move() {
@@ -392,7 +422,7 @@ void pixel::move() {
 }
 // Averages colours with any neighbours; an expired pixel then goes dark so it respawns, unless it is fading out.
 void pixel::computeCycle(std::vector<pixel*> & neighbors) {
-  if (neighbors.size() != 0) {
+  if (neighbors.size() != 0 && !this->fadingOut) {
     this->averageColors(neighbors);
   }
   if (!this->shareTo && !this->fadingOut) {
@@ -489,7 +519,7 @@ void reconcilePixels() {
 
   int core = 0, arriving = 0, leaving = 0;
   for (pixel& px : pixels) {
-    if (px.retired || px.fadingOut) continue;
+    if (px.retired || (px.fadingOut && !px.respawn)) continue;
     if (colourAbsent(px.spawnIndex)) { px.expire(); continue; }
     if (px.role == ROLE_CORE) core++;
     else if (px.role == ROLE_ARRIVING) arriving++;
@@ -498,7 +528,7 @@ void reconcilePixels() {
 
   // Surplus pixels take a transition role where one is open, otherwise fade out.
   for (pixel& px : pixels) {
-    if (px.retired || px.fadingOut) continue;
+    if (px.retired || (px.fadingOut && !px.respawn)) continue;
     if (px.role == ROLE_CORE && core > wantCore) {
       core--;
       if (leaving < wantLeaving) { px.role = ROLE_LEAVING; leaving++; }
@@ -552,7 +582,7 @@ void loop() {
     // A dark pixel respawns in the same role, unless it was fading out for good.
     if (pixels[i].age((int)neighbors.size())) {
       pixels[i].rewardOrphans(neighbors);
-      if (pixels[i].fadingOut) {
+      if (pixels[i].fadingOut && !pixels[i].respawn) {
         pixels[i].retire();
       } else {
         addAvailableIndex(pixels[i].getX(), pixels[i].getY());

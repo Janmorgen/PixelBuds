@@ -7,6 +7,7 @@
 #include "daycycle.h"
 #include "islands.h"
 #include "overrides.h"
+#include "rules.h"
 
 // Plain-text HTTP API on port 80. Every handler checks all its arguments before changing anything.
 
@@ -102,12 +103,12 @@ static String uptimeText() {
 }
 
 static String statusText() {
-  return dayCycleStatus() + overridesStatus() + islandStatus(activeLook.islandHold) +
+  return dayCycleStatus() + overridesStatus() + rulesStatus() + islandStatus(currentIslandHold()) +
          "uptime:      " + uptimeText() + "  build " __DATE__ " " __TIME__ "\n";
 }
 
 static String statusJson() {
-  return "{" + dayCycleJson() + "," + overridesJson() + "," + islandJson(activeLook.islandHold) +
+  return "{" + dayCycleJson() + "," + overridesJson() + "," + rulesJson() + "," + islandJson(currentIslandHold()) +
          ",\"uptimeSeconds\":" + String(millis() / 1000) + ",\"build\":\"" __DATE__ " " __TIME__ "\"}";
 }
 
@@ -134,7 +135,13 @@ static const char HELP_TEXT[] =
   "/test                 24-minute test day from 05:00\n"
   "/test?hold=X          X = day, golden, evening, embers or HH:MM; ?for=MIN (1-1440) ends it\n"
   "/test/stop            end a test day or hold\n"
-  "/islands              island experiment: ?mode=off|split|edge|orphan  ?round=on|off\n";
+  "\n"
+  "Settings, kept until changed:\n"
+  "/rules                ?mix=pool|pair  ?mixrate=0-100  ?life=MIN-MAX (contact frames, 1-2000)\n"
+  "                      ?expire=snap|fade  ?round=on|off\n"
+  "/rules/reset          back to pool, 100, 30-100, snap, off\n"
+  "/islands              ?mode=off|split|edge|orphan  ?boost=0-5  ?hold=auto|0-100  (?round= still works)\n"
+  "/islands/reset        back to split, boost 2, hold auto\n";
 
 // ---------- routes ----------
 
@@ -151,17 +158,54 @@ static void handleStatusJson() {
 
 static void handleIslands() {
   Check c;
-  allowOnly(c, {"mode", "round"});
+  allowOnly(c, {"mode", "round", "boost", "hold"});
   int mode = -1, round = -1;
+  float boost = -1, hold = -2;
   if (web.hasArg("mode") && (mode = pickName(web.arg("mode"), islandModeNames, 4)) < 0)
     c.fail("Unknown mode. Use off, split, edge or orphan.");
   if (web.hasArg("round") && (round = pickName(web.arg("round"), onOffNames, 2)) < 0)
     c.fail("Unknown rounding. Use on or off.");
+  if (web.hasArg("boost") && !parseNumber(web.arg("boost"), 0, 5, boost)) c.fail("?boost= takes 0 to 5.");
+  if (web.hasArg("hold")) {
+    long pct;
+    if (web.arg("hold") == "auto") hold = -1;
+    else if (parseInt(web.arg("hold"), 0, 100, pct)) hold = pct / 100.0f;
+    else c.fail("?hold= takes auto or 0 to 100.");
+  }
   if (rejected(c)) return;
 
   if (mode >= 0) requestIslandMode(mode);
-  if (round >= 0) islandRounding = round == 1;
-  sendText(200, islandStatus(activeLook.islandHold));
+  if (round >= 0) ruleRound = round == 1;
+  if (boost >= 0) islandBoost = boost;
+  if (hold > -2) islandHoldSetting = hold;
+  sendText(200, islandStatus(currentIslandHold()) + rulesStatus());
+}
+
+static void handleRules() {
+  Check c;
+  allowOnly(c, {"mix", "mixrate", "life", "expire", "round"});
+  int mix = -1, expire = -1, round = -1;
+  long rate = -1, lifeMin = -1, lifeMax = -1;
+  if (web.hasArg("mix") && (mix = pickName(web.arg("mix"), mixNames, 2)) < 0) c.fail("?mix= takes pool or pair.");
+  if (web.hasArg("mixrate") && !parseInt(web.arg("mixrate"), 0, 100, rate)) c.fail("?mixrate= takes 0 to 100.");
+  if (web.hasArg("expire") && (expire = pickName(web.arg("expire"), expireNames, 2)) < 0)
+    c.fail("?expire= takes snap or fade.");
+  if (web.hasArg("round") && (round = pickName(web.arg("round"), onOffNames, 2)) < 0) c.fail("?round= takes on or off.");
+  if (web.hasArg("life")) {
+    String l = web.arg("life");
+    int dash = l.indexOf('-');
+    if (dash < 1 || !parseInt(l.substring(0, dash), 1, RULE_LIFE_LIMIT, lifeMin) ||
+        !parseInt(l.substring(dash + 1), 1, RULE_LIFE_LIMIT, lifeMax) || lifeMin > lifeMax)
+      c.fail("?life= takes MIN-MAX, 1 to 2000 with MIN <= MAX, e.g. 30-100.");
+  }
+  if (rejected(c)) return;
+
+  if (mix >= 0) ruleMix = mix;
+  if (rate >= 0) ruleMixRate = rate;
+  if (expire >= 0) ruleExpireFade = expire == 1;
+  if (round >= 0) ruleRound = round == 1;
+  if (lifeMin >= 0) { ruleLifeMin = lifeMin; ruleLifeMax = lifeMax; }
+  sendText(200, rulesStatus());
 }
 
 static void handleTest() {
@@ -324,6 +368,9 @@ static void webBegin() {
   web.on("/status.json", handleStatusJson);
   web.on("/help", []() { sendText(200, HELP_TEXT); });
   web.on("/islands", handleIslands);
+  web.on("/islands/reset", []() { if (noOptions()) { resetIslands(); sendText(200, islandStatus(currentIslandHold())); } });
+  web.on("/rules", handleRules);
+  web.on("/rules/reset", []() { if (noOptions()) { resetRules(); sendText(200, rulesStatus()); } });
   web.on("/test", handleTest);
   web.on("/test/stop", handleTestStop);
   web.on("/power/off", handlePowerOff);
