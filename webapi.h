@@ -10,7 +10,8 @@
 #include "rules.h"
 #include "settings.h"
 
-// Plain-text HTTP API on port 80. Every handler checks all its arguments before changing anything.
+// HTTP API on port 80. Every handler checks all its arguments before changing anything, then replies with JSON:
+// {"ok":true,"message":...,"status":{...}} or {"ok":false,"error":...}. / , /status and /help are plain text for people.
 
 static WebServer web(80);
 static bool webStarted = false;
@@ -86,10 +87,26 @@ static void sendText(int code, const String& body) {
   web.send(code, "text/plain", body.endsWith("\n") ? body : body + "\n");
 }
 
+// `s` as a quoted JSON string.
+static String jsonString(const String& s) {
+  String out = "\"";
+  for (int i = 0; i < (int)s.length(); i++) {
+    char ch = s[i];
+    if (ch == '"' || ch == '\\') { out += '\\'; out += ch; }
+    else if ((uint8_t)ch < 0x20) { char esc[8]; snprintf(esc, sizeof(esc), "\\u%04x", ch); out += esc; }
+    else out += ch;
+  }
+  return out + "\"";
+}
+
+static void sendError(int code, const String& error) {
+  web.send(code, "application/json", "{\"ok\":false,\"error\":" + jsonString(error) + "}");
+}
+
 // Sends 400 with the check's error; returns true if it did.
 static bool rejected(const Check& c) {
   if (c.ok()) return false;
-  sendText(400, c.error);
+  sendError(400, c.error);
   return true;
 }
 
@@ -114,8 +131,21 @@ static String statusJson() {
          ",\"uptimeSeconds\":" + String(millis() / 1000) + ",\"build\":\"" __DATE__ " " __TIME__ "\"}";
 }
 
+// Brings the look up to date with any change a handler just made, overrides included.
+static void refreshState() {
+  dayCycleUpdate();
+  overridesUpdate();
+}
+
+// Replies 200 with a message and the full status.
+static void sendOk(const String& message) {
+  refreshState();
+  web.send(200, "application/json", "{\"ok\":true,\"message\":" + jsonString(message) + ",\"status\":" + statusJson() + "}");
+}
+
 static const char HELP_TEXT[] =
-  "PixelBuds HTTP API. Plain text unless noted; every route answers GET.\n"
+  "PixelBuds HTTP API. Every route answers GET. Routes reply with JSON {ok, message, status} or\n"
+  "{ok:false, error}, except /, /status and /help, which are plain text. Full reference: docs/API.md.\n"
   "\n"
   "/ or /status          status\n"
   "/status.json          status as JSON\n"
@@ -151,9 +181,6 @@ static const char HELP_TEXT[] =
 // ---------- routes ----------
 
 static void handleStatus() {
-  Check c;
-  allowOnly(c, {});
-  if (rejected(c)) return;
   sendText(200, statusText());
 }
 
@@ -184,7 +211,7 @@ static void handleIslands() {
   if (boost >= 0) islandBoost = boost;
   if (hold > -2) islandHoldSetting = hold;
   settingsSave();
-  sendText(200, islandStatus(currentIslandHold()) + rulesStatus());
+  sendOk(web.args() ? "Island settings saved." : "Island settings.");
 }
 
 static void handleRules() {
@@ -212,7 +239,7 @@ static void handleRules() {
   if (round >= 0) ruleRound = round == 1;
   if (lifeMin >= 0) { ruleLifeMin = lifeMin; ruleLifeMax = lifeMax; }
   settingsSave();
-  sendText(200, rulesStatus());
+  sendOk(web.args() ? "Rules saved." : "Rules.");
 }
 
 static void handleTest() {
@@ -234,14 +261,12 @@ static void handleTest() {
 
   if (web.hasArg("hold")) {
     startTestHold(minute, look, forMin * 60000UL);
-    dayCycleUpdate();
     String until = forMin ? "for " + String(forMin) + " min" : String("until /test/stop");
-    sendText(200, "Holding " + web.arg("hold") + " " + until + ".\n\n" + statusText());
+    sendOk("Holding " + web.arg("hold") + " " + until + ".");
     return;
   }
   startTestDay();
-  dayCycleUpdate();
-  sendText(200, "Test day started: 05:00 to 05:00 in 24 minutes, one minute per hour.\n\n" + statusText());
+  sendOk("Test day started: 05:00 to 05:00 in 24 minutes, one minute per hour.");
 }
 
 static void handleTestStop() {
@@ -249,8 +274,7 @@ static void handleTestStop() {
   allowOnly(c, {});
   if (rejected(c)) return;
   stopTestDay();
-  dayCycleUpdate();
-  sendText(200, "Test day stopped.\n\n" + statusText());
+  sendOk("Test day or hold stopped.");
 }
 
 static void handleSchedule() {
@@ -277,8 +301,7 @@ static void handleSchedule() {
   scheduleSunsetShift = set;
   settingsSave();
   rebuildSchedule();
-  dayCycleUpdate();
-  sendText(200, scheduleSettingsStatus() + "\n" + statusText());
+  sendOk(web.args() ? "Schedule saved." : "Schedule.");
 }
 
 // Reads ?fade=SEC (default 1 s) into ms.
@@ -300,7 +323,7 @@ static void handlePowerOff() {
   }
   if (rejected(c)) return;
   setPower(false, morning, fadeMs);
-  sendText(200, "Off.\n\n" + overridesStatus());
+  sendOk(morning ? "Off until morning." : "Off until the phase changes.");
 }
 
 static void handlePowerOn() {
@@ -310,7 +333,7 @@ static void handlePowerOn() {
   readFade(c, fadeMs);
   if (rejected(c)) return;
   setPower(true, false, fadeMs);
-  sendText(200, "On.\n\n" + overridesStatus());
+  sendOk("On.");
 }
 
 static void handleBrightness() {
@@ -320,7 +343,7 @@ static void handleBrightness() {
   if (web.hasArg("scale") && !parseInt(web.arg("scale"), 0, 100, pct)) c.fail("?scale= takes a percentage, 0 to 100.");
   if (rejected(c)) return;
   if (pct >= 0) setBrightnessPct(pct);
-  sendText(200, overridesStatus());
+  sendOk(pct >= 0 ? "Brightness set." : "Brightness.");
 }
 
 static void handleSleep() {
@@ -331,7 +354,7 @@ static void handleSleep() {
   else if (!parseInt(web.arg("in"), 1, 240, minutes)) c.fail("?in= takes minutes, 1 to 240.");
   if (rejected(c)) return;
   startSleep(minutes);
-  sendText(200, "Sleeping.\n\n" + overridesStatus());
+  sendOk("Sleeping: off in " + String(minutes) + " min, then off until morning.");
 }
 
 static void handleAdjust() {
@@ -348,7 +371,7 @@ static void handleAdjust() {
   }
   if (rejected(c)) return;
   for (int i = 0; i < 4; i++) if (values[i] >= 0) *targets[i] = values[i];
-  sendText(200, overridesStatus());
+  sendOk(web.args() ? "Adjusted." : "Adjustments.");
 }
 
 static void handleColors() {
@@ -370,7 +393,7 @@ static void handleColors() {
   if (c.ok() && !anyPresent) c.fail("At least one colour has to stay on.");
   if (rejected(c)) return;
   for (int i = 0; i < PALETTE_SIZE; i++) colourOverride[i] = values[i];
-  sendText(200, overridesStatus());
+  sendOk(web.args() ? "Colours set." : "Colours.");
 }
 
 static void handlePhaseNext() {
@@ -380,13 +403,12 @@ static void handlePhaseNext() {
   const char* look;
   float at;
   if (!skipToNextLook(&look, &at)) {
-    sendText(409, "Can't skip ahead during a test day or hold, or before the clock is set.");
+    sendError(409, "Can't skip ahead during a test day or hold, or before the clock is set.");
     return;
   }
   char t[8];
   formatMinute(t, sizeof(t), at);
-  dayCycleUpdate();
-  sendText(200, String("Showing the ") + look + " look now; the schedule catches up at " + t + ".\n\n" + statusText());
+  sendOk(String("Showing the ") + look + " look now; the schedule catches up at " + t + ".");
 }
 
 // Answers a route that takes no options; returns false if it had some.
@@ -404,10 +426,10 @@ static void webBegin() {
   web.on("/help", []() { sendText(200, HELP_TEXT); });
   web.on("/islands", handleIslands);
   web.on("/schedule", handleSchedule);
-  web.on("/schedule/reset", []() { if (noOptions()) { resetScheduleSettings(); settingsSave(); rebuildSchedule(); dayCycleUpdate(); sendText(200, statusText()); } });
-  web.on("/islands/reset", []() { if (noOptions()) { resetIslands(); settingsSave(); sendText(200, islandStatus(currentIslandHold())); } });
+  web.on("/schedule/reset", []() { if (noOptions()) { resetScheduleSettings(); settingsSave(); rebuildSchedule(); sendOk("Schedule reset to defaults."); } });
+  web.on("/islands/reset", []() { if (noOptions()) { resetIslands(); settingsSave(); sendOk("Island settings reset to defaults."); } });
   web.on("/rules", handleRules);
-  web.on("/rules/reset", []() { if (noOptions()) { resetRules(); settingsSave(); sendText(200, rulesStatus()); } });
+  web.on("/rules/reset", []() { if (noOptions()) { resetRules(); settingsSave(); sendOk("Rules reset to defaults."); } });
   web.on("/test", handleTest);
   web.on("/test/stop", handleTestStop);
   web.on("/power/off", handlePowerOff);
@@ -417,11 +439,11 @@ static void webBegin() {
   web.on("/adjust", handleAdjust);
   web.on("/colors", handleColors);
   web.on("/phase/next", handlePhaseNext);
-  web.on("/pause/on", []() { if (noOptions()) { paused = true; sendText(200, "Paused.\n\n" + overridesStatus()); } });
-  web.on("/pause/off", []() { if (noOptions()) { paused = false; sendText(200, "Resumed.\n\n" + overridesStatus()); } });
-  web.on("/shuffle", []() { if (noOptions()) { shuffleRequested = true; sendText(200, "Shuffled."); } });
-  web.on("/reset", []() { if (noOptions()) { resetOverrides(); dayCycleUpdate(); sendText(200, "Overrides cleared.\n\n" + statusText()); } });
-  web.onNotFound([]() { sendText(404, "No such endpoint: " + web.uri() + "\n\n" + HELP_TEXT); });
+  web.on("/pause/on", []() { if (noOptions()) { paused = true; sendOk("Paused."); } });
+  web.on("/pause/off", []() { if (noOptions()) { paused = false; sendOk("Resumed."); } });
+  web.on("/shuffle", []() { if (noOptions()) { shuffleRequested = true; sendOk("Shuffled."); } });
+  web.on("/reset", []() { if (noOptions()) { resetOverrides(); sendOk("Overrides cleared."); } });
+  web.onNotFound([]() { sendError(404, "No such endpoint: " + web.uri() + ". See /help."); });
   web.begin();
   webStarted = true;
 }

@@ -76,6 +76,7 @@ static int testHoldLook = -1;       // >= 0 shows looks[testHoldLook] until stop
 static uint32_t testHoldEndMs = 0;  // when a hold ends by itself; 0 = never
 static float skipMinute = -1;       // >= 0: light clock jumped ahead to this keyframe until the wall clock reaches it
 static uint32_t skipEndMs = 0;
+static int skipLook = -1;           // index into looks[] of the look skipped to
 static float colourOverride[PALETTE_SIZE] = {-1, -1, -1, -1};   // >= 0 replaces the look's spawn weight, 0-1
 
 static Look activeLook = LOOK_DAY;
@@ -267,7 +268,8 @@ bool skipToNextLook(const char** lookName, float* atMinute) {
     if (ahead < 1.0f) { current = schedule[k].look; continue; }
     skipMinute = schedule[k].minute;
     skipEndMs = max(millis() + (uint32_t)(ahead * 60000.0f), (uint32_t)1);
-    for (int i = 0; i < LOOK_COUNT; i++) if (looks[i] == schedule[k].look) *lookName = lookNames[i];
+    for (int i = 0; i < LOOK_COUNT; i++) if (looks[i] == schedule[k].look) skipLook = i;
+    *lookName = lookNames[skipLook];
     *atMinute = skipMinute;
     return true;
   }
@@ -401,7 +403,7 @@ String dayCycleStatus() {
   } else if (testHoldMinute >= 0) {
     snprintf(mode, sizeof(mode), "holding %s (%s)", t, until);
   } else if (skipMinute >= 0) {
-    snprintf(mode, sizeof(mode), "skipped ahead; the schedule catches up at %s", t);
+    snprintf(mode, sizeof(mode), "skipped ahead to the %s look; the schedule catches up at %s", lookNames[skipLook], t);
   } else if (testActive) {
     uint32_t elapsed = (millis() - testStartMs) / 1000;
     uint32_t left = MINUTES_PER_DAY * TEST_MS_PER_MINUTE / 1000 - elapsed;
@@ -448,13 +450,32 @@ String dayCycleJson() {
   }
   const char* mode = holdActive() ? "hold" : testActive ? "test" : skipMinute >= 0 ? "skipped" : activeFromClock ? "schedule" : "fallback";
 
-  char buf[768];
+  // Hold, test-day and skip details; null when not active.
+  char hold[96] = "null", test[40] = "null", skip[96] = "null", left[16] = "null";
+  if (testHoldEndMs) snprintf(left, sizeof(left), "%lu", (unsigned long)((testHoldEndMs - millis()) / 1000));
+  if (testHoldLook >= 0) {
+    snprintf(hold, sizeof(hold), "{\"look\":\"%s\",\"time\":null,\"secondsLeft\":%s}", lookNames[testHoldLook], left);
+  } else if (testHoldMinute >= 0) {
+    snprintf(hold, sizeof(hold), "{\"look\":null,\"time\":\"%s\",\"secondsLeft\":%s}", t, left);
+  }
+  if (testActive) {
+    uint32_t elapsed = millis() - testStartMs;
+    snprintf(test, sizeof(test), "{\"secondsLeft\":%lu}", (unsigned long)((MINUTES_PER_DAY * TEST_MS_PER_MINUTE - elapsed) / 1000));
+  }
+  if (skipMinute >= 0) {
+    snprintf(skip, sizeof(skip), "{\"look\":\"%s\",\"catchUpAt\":\"%s\",\"secondsLeft\":%lu}", lookNames[skipLook], t,
+             (unsigned long)((skipEndMs - millis()) / 1000));
+  }
+  char lightTime[10];
+  snprintf(lightTime, sizeof(lightTime), testHoldLook >= 0 ? "null" : "\"%s\"", t);
+
+  char buf[1024];
   int n = snprintf(buf, sizeof(buf),
-    "\"clock\":%s%s%s,\"mode\":\"%s\",\"lightTime\":\"%s\",\"phase\":\"%s\",\"progress\":%.2f,"
+    "\"clock\":%s%s%s,\"mode\":\"%s\",\"hold\":%s,\"testDay\":%s,\"skip\":%s,\"lightTime\":%s,\"phase\":\"%s\",\"progress\":%.2f,"
     "\"sun\":{\"rise\":\"%s\",\"set\":\"%s\",\"fromClock\":%s},"
     "\"look\":{\"brightness\":%.1f,\"pixels\":%.1f,\"pixelsNow\":%d,\"moveEvery\":%.2f,\"mixEvery\":%.2f,\"fade\":%.1f,\"weights\":{",
     clock[0] ? "\"" : "", clock[0] ? clock : "null", clock[0] ? "\"" : "",
-    mode, t, activePhase, activeSegT, rise, set, sunFromClock ? "true" : "false",
+    mode, hold, test, skip, lightTime, activePhase, activeSegT, rise, set, sunFromClock ? "true" : "false",
     activeLook.brightness, activeLook.pixels, reportedPixels, activeLook.moveEvery, activeLook.colorEvery, activeLook.fade);
   for (int c = 0; c < PALETTE_SIZE && n < (int)sizeof(buf); c++) {
     n += snprintf(buf + n, sizeof(buf) - n, "%s\"%s\":%.2f", c ? "," : "", paletteNames[c], activeLook.weights[c]);
