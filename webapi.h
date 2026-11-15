@@ -6,6 +6,7 @@
 
 #include "daycycle.h"
 #include "islands.h"
+#include "overrides.h"
 
 // Plain-text HTTP API on port 80. Every handler checks all its arguments before changing anything.
 
@@ -101,12 +102,12 @@ static String uptimeText() {
 }
 
 static String statusText() {
-  return dayCycleStatus() + islandStatus(activeLook.islandHold) +
+  return dayCycleStatus() + overridesStatus() + islandStatus(activeLook.islandHold) +
          "uptime:      " + uptimeText() + "  build " __DATE__ " " __TIME__ "\n";
 }
 
 static String statusJson() {
-  return "{" + dayCycleJson() + "," + islandJson(activeLook.islandHold) +
+  return "{" + dayCycleJson() + "," + overridesJson() + "," + islandJson(activeLook.islandHold) +
          ",\"uptimeSeconds\":" + String(millis() / 1000) + ",\"build\":\"" __DATE__ " " __TIME__ "\"}";
 }
 
@@ -116,8 +117,22 @@ static const char HELP_TEXT[] =
   "/ or /status          status\n"
   "/status.json          status as JSON\n"
   "/help                 this list\n"
+  "\n"
+  "Overrides. They last until the phase changes (status shows when) or /reset:\n"
+  "/power/off            ?fade=SEC (0-600, default 1)  ?until=morning keeps it off until wake\n"
+  "/power/on             ?fade=SEC; also cancels a sleep timer\n"
+  "/brightness?scale=N   0-100 percent of the current look\n"
+  "/sleep?in=MIN         dim to off over 1-240 minutes, then off until wake\n"
+  "/adjust               ?speed= ?pixels= ?trail= ?mix=  percent of the look (25-400; pixels 25-200)\n"
+  "/colors               ?red= ?green= ?blue= ?amber=  0-100, or auto for the schedule's\n"
+  "/phase/next           jump to the next look now; the schedule catches up\n"
+  "/pause/on, /pause/off freeze or resume the motion\n"
+  "/shuffle              rescatter the pixels\n"
+  "/reset                clear every override, power-off and skip included\n"
+  "\n"
+  "Testing:\n"
   "/test                 24-minute test day from 05:00\n"
-  "/test?hold=day|HH:MM  hold the light at midday or a time, until /test/stop\n"
+  "/test?hold=X          X = day, golden, evening, embers or HH:MM; ?for=MIN (1-1440) ends it\n"
   "/test/stop            end a test day or hold\n"
   "/islands              island experiment: ?mode=off|split|edge|orphan  ?round=on|off\n";
 
@@ -151,19 +166,26 @@ static void handleIslands() {
 
 static void handleTest() {
   Check c;
-  allowOnly(c, {"hold"});
-  int minute = -1;
+  allowOnly(c, {"hold", "for"});
+  int minute = -1, look = -1;
+  long forMin = 0;
   if (web.hasArg("hold")) {
     String h = web.arg("hold");
-    if (h == "day") minute = 720;
-    else if (!parseClock(h, minute)) c.fail("Use /test?hold=day or /test?hold=HH:MM (00:00 to 23:59).");
+    look = pickName(h, lookNames, LOOK_COUNT);
+    if (look < 0 && !parseClock(h, minute))
+      c.fail("Use /test?hold= with day, golden, evening, embers or HH:MM (00:00 to 23:59).");
+  }
+  if (web.hasArg("for")) {
+    if (!web.hasArg("hold")) c.fail("?for= goes with ?hold=.");
+    else if (!parseInt(web.arg("for"), 1, 1440, forMin)) c.fail("?for= takes minutes, 1 to 1440.");
   }
   if (rejected(c)) return;
 
-  if (minute >= 0) {
-    startTestHold(minute);
+  if (web.hasArg("hold")) {
+    startTestHold(minute, look, forMin * 60000UL);
     dayCycleUpdate();
-    sendText(200, "Holding the light at " + web.arg("hold") + " until /test/stop.\n\n" + statusText());
+    String until = forMin ? "for " + String(forMin) + " min" : String("until /test/stop");
+    sendText(200, "Holding " + web.arg("hold") + " " + until + ".\n\n" + statusText());
     return;
   }
   startTestDay();
@@ -180,6 +202,121 @@ static void handleTestStop() {
   sendText(200, "Test day stopped.\n\n" + statusText());
 }
 
+// Reads ?fade=SEC (default 1 s) into ms.
+static void readFade(Check& c, uint32_t& ms) {
+  long sec = 1;
+  if (web.hasArg("fade") && !parseInt(web.arg("fade"), 0, 600, sec)) c.fail("?fade= takes seconds, 0 to 600.");
+  ms = sec * 1000;
+}
+
+static void handlePowerOff() {
+  Check c;
+  allowOnly(c, {"fade", "until"});
+  uint32_t fadeMs;
+  readFade(c, fadeMs);
+  bool morning = false;
+  if (web.hasArg("until")) {
+    if (web.arg("until") == "morning") morning = true;
+    else if (web.arg("until") != "phase") c.fail("?until= takes morning or phase.");
+  }
+  if (rejected(c)) return;
+  setPower(false, morning, fadeMs);
+  sendText(200, "Off.\n\n" + overridesStatus());
+}
+
+static void handlePowerOn() {
+  Check c;
+  allowOnly(c, {"fade"});
+  uint32_t fadeMs;
+  readFade(c, fadeMs);
+  if (rejected(c)) return;
+  setPower(true, false, fadeMs);
+  sendText(200, "On.\n\n" + overridesStatus());
+}
+
+static void handleBrightness() {
+  Check c;
+  allowOnly(c, {"scale"});
+  long pct = -1;
+  if (web.hasArg("scale") && !parseInt(web.arg("scale"), 0, 100, pct)) c.fail("?scale= takes a percentage, 0 to 100.");
+  if (rejected(c)) return;
+  if (pct >= 0) setBrightnessPct(pct);
+  sendText(200, overridesStatus());
+}
+
+static void handleSleep() {
+  Check c;
+  allowOnly(c, {"in"});
+  long minutes = 0;
+  if (!web.hasArg("in")) c.fail("Use /sleep?in=MIN, 1 to 240.");
+  else if (!parseInt(web.arg("in"), 1, 240, minutes)) c.fail("?in= takes minutes, 1 to 240.");
+  if (rejected(c)) return;
+  startSleep(minutes);
+  sendText(200, "Sleeping.\n\n" + overridesStatus());
+}
+
+static void handleAdjust() {
+  Check c;
+  const char* names[] = {"speed", "pixels", "trail", "mix"};
+  int* targets[] = {&adjustSpeed, &adjustPixels, &adjustTrail, &adjustMix};
+  long values[4];
+  allowOnly(c, {"speed", "pixels", "trail", "mix"});
+  for (int i = 0; i < 4; i++) {
+    values[i] = -1;
+    long hi = i == 1 ? 200 : 400;
+    if (web.hasArg(names[i]) && !parseInt(web.arg(names[i]), 25, hi, values[i]))
+      c.fail(String("?") + names[i] + "= takes a percentage, 25 to " + hi + ".");
+  }
+  if (rejected(c)) return;
+  for (int i = 0; i < 4; i++) if (values[i] >= 0) *targets[i] = values[i];
+  sendText(200, overridesStatus());
+}
+
+static void handleColors() {
+  Check c;
+  allowOnly(c, {"red", "green", "blue", "amber"});
+  float values[PALETTE_SIZE];
+  bool anyPresent = false;
+  for (int i = 0; i < PALETTE_SIZE; i++) {
+    values[i] = colourOverride[i];
+    bool scheduled = activeSegFrom->weights[i] > 0 || activeSegTo->weights[i] > 0;
+    if (web.hasArg(paletteNames[i])) {
+      long pct;
+      if (web.arg(paletteNames[i]) == "auto") values[i] = -1;
+      else if (parseInt(web.arg(paletteNames[i]), 0, 100, pct)) values[i] = pct / 100.0f;
+      else c.fail(String("?") + paletteNames[i] + "= takes 0 to 100, or auto.");
+    }
+    anyPresent |= values[i] > 0 || (values[i] < 0 && scheduled);
+  }
+  if (c.ok() && !anyPresent) c.fail("At least one colour has to stay on.");
+  if (rejected(c)) return;
+  for (int i = 0; i < PALETTE_SIZE; i++) colourOverride[i] = values[i];
+  sendText(200, overridesStatus());
+}
+
+static void handlePhaseNext() {
+  Check c;
+  allowOnly(c, {});
+  if (rejected(c)) return;
+  const char* look;
+  float at;
+  if (!skipToNextLook(&look, &at)) {
+    sendText(409, "Can't skip ahead during a test day or hold, or before the clock is set.");
+    return;
+  }
+  char t[8];
+  formatMinute(t, sizeof(t), at);
+  dayCycleUpdate();
+  sendText(200, String("Showing the ") + look + " look now; the schedule catches up at " + t + ".\n\n" + statusText());
+}
+
+// Answers a route that takes no options; returns false if it had some.
+static bool noOptions() {
+  Check c;
+  allowOnly(c, {});
+  return !rejected(c);
+}
+
 // Registers the routes and starts the server; needs a live Wi-Fi link.
 static void webBegin() {
   web.on("/", handleStatus);
@@ -189,6 +326,17 @@ static void webBegin() {
   web.on("/islands", handleIslands);
   web.on("/test", handleTest);
   web.on("/test/stop", handleTestStop);
+  web.on("/power/off", handlePowerOff);
+  web.on("/power/on", handlePowerOn);
+  web.on("/brightness", handleBrightness);
+  web.on("/sleep", handleSleep);
+  web.on("/adjust", handleAdjust);
+  web.on("/colors", handleColors);
+  web.on("/phase/next", handlePhaseNext);
+  web.on("/pause/on", []() { if (noOptions()) { paused = true; sendText(200, "Paused.\n\n" + overridesStatus()); } });
+  web.on("/pause/off", []() { if (noOptions()) { paused = false; sendText(200, "Resumed.\n\n" + overridesStatus()); } });
+  web.on("/shuffle", []() { if (noOptions()) { shuffleRequested = true; sendText(200, "Shuffled."); } });
+  web.on("/reset", []() { if (noOptions()) { resetOverrides(); dayCycleUpdate(); sendText(200, "Overrides cleared.\n\n" + statusText()); } });
   web.onNotFound([]() { sendText(404, "No such endpoint: " + web.uri() + "\n\n" + HELP_TEXT); });
   web.begin();
   webStarted = true;

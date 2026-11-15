@@ -426,9 +426,10 @@ int nextIslandVariant() {
   return edge <= orphan ? VARIANT_EDGE : VARIANT_ORPHAN;
 }
 
-// Switches the island experiment and reshuffles every pixel into a fresh layout for the new mode.
-void applyIslandMode() {
+// Rescatters every pixel into a fresh layout for the current island mode.
+void rescatterPixels() {
   islandModeDirty = false;
+  shuffleRequested = false;
   initAvailableIndicies();
   FastLED.clear();
   for (size_t i = 0; i < pixels.size(); i++) {
@@ -471,8 +472,8 @@ static int lastSegment = -2;
 // Matches the pixels to the current transition: the extra pixels of the bigger phase arrive or leave
 // together across it, and pixels of a colour neither phase uses are recycled.
 void reconcilePixels() {
-  int from = max(1, (int)lroundf(activeSegFrom->pixels));
-  int to = max(1, (int)lroundf(activeSegTo->pixels));
+  int from = max(1, (int)lroundf(activeSegFrom->pixels * adjustPixels / 100.0f));
+  int to = max(1, (int)lroundf(activeSegTo->pixels * adjustPixels / 100.0f));
   int wantCore = min(from, to);
   int wantArriving = to > from ? to - from : 0;
   int wantLeaving = from > to ? from - to : 0;
@@ -513,7 +514,9 @@ void reconcilePixels() {
   }
 
   // Missing pixels join; arrivals and leavers start at the transition's current intensity.
-  while ((core < wantCore || arriving < wantArriving || leaving < wantLeaving) && !availableIndicies.empty()) {
+  bool anyColour = false;
+  for (int c = 0; c < PALETTE_SIZE; c++) anyColour |= !colourAbsent(c);
+  while (anyColour && (core < wantCore || arriving < wantArriving || leaving < wantLeaving) && !availableIndicies.empty()) {
     pixel newPixel = pixel();
     if (core < wantCore) { newPixel.role = ROLE_CORE; core++; }
     else if (arriving < wantArriving) { newPixel.role = ROLE_ARRIVING; arriving++; }
@@ -528,15 +531,23 @@ void reconcilePixels() {
 void loop() {
   networkLoop();
   const Look& look = dayCycleUpdate();
-  if (islandModeDirty) applyIslandMode();
+  overridesUpdate();
+  if (islandModeDirty || shuffleRequested) rescatterPixels();
   int moveSpeed = max(1, (int)lroundf(look.moveEvery));
   int colorSpeed = max(1, (int)lroundf(look.colorEvery));
   fadeBoard((int)lroundf(look.fade));
-  FastLED.setBrightness((uint8_t)lroundf(look.brightness));
+  FastLED.setBrightness(shownBrightness());
 
   for (size_t i = 0; i < pixels.size(); i++) {
     if (pixels[i].retired) continue;
     std::vector<pixel*> neighbors = pixels[i].getNeighbors();
+
+    // Paused pixels hold still and keep their colour and age.
+    if (paused) {
+      pixels[i].updatePresence();
+      pixels[i].writePixel(moveSpeed);
+      continue;
+    }
 
     // A dark pixel respawns in the same role, unless it was fading out for good.
     if (pixels[i].age((int)neighbors.size())) {

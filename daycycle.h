@@ -40,6 +40,11 @@ static const Look LOOK_GOLDEN  = { 70, {1.0f, 0.6f, 0.0f, 0.8f}, 24, 2, 1, 40, 0
 static const Look LOOK_EVENING = { 40, {1.0f, 0.3f, 0.0f, 1.0f}, 18, 3, 2, 28, 0};
 static const Look LOOK_EMBERS  = { 10, {1.0f, 0.0f, 0.0f, 0.4f},  6, 6, 3, 16, 0};
 
+#define LOOK_COUNT 4
+static const Look* const looks[LOOK_COUNT] = {&LOOK_DAY, &LOOK_GOLDEN, &LOOK_EVENING, &LOOK_EMBERS};
+static const char* const lookNames[LOOK_COUNT] = {"day", "golden", "evening", "embers"};
+static const char* const lookPhases[LOOK_COUNT] = {"day", "golden hour", "evening", "embers"};
+
 // A look pinned to a minute of the day; name labels the stretch that starts there.
 struct Keyframe {
   float minute;
@@ -57,6 +62,11 @@ static int scheduleYearDay = -1;
 static bool testActive = false;
 static uint32_t testStartMs = 0;
 static float testHoldMinute = -1;   // >= 0 pins the light clock to this minute until stopped
+static int testHoldLook = -1;       // >= 0 shows looks[testHoldLook] until stopped
+static uint32_t testHoldEndMs = 0;  // when a hold ends by itself; 0 = never
+static float skipMinute = -1;       // >= 0: light clock jumped ahead to this keyframe until the wall clock reaches it
+static uint32_t skipEndMs = 0;
+static float colourOverride[PALETTE_SIZE] = {-1, -1, -1, -1};   // >= 0 replaces the look's spawn weight, 0-1
 
 static Look activeLook = LOOK_DAY;
 // The stretch between two keyframes that the clock is in, with linear progress 0-1 across it.
@@ -167,19 +177,82 @@ static bool clockIsSet(time_t now) {
 // Starts a 24-minute test day at 05:00 using today's sun times.
 void startTestDay() {
   testHoldMinute = -1;
+  testHoldLook = -1;
   testActive = true;
   testStartMs = millis();
 }
 
-// Pins the light clock to one minute of the day until stopTestDay().
-void startTestHold(float minute) {
+// Pins the light to one minute of the day, or to one look when minute < 0; forMs 0 holds until stopTestDay().
+void startTestHold(float minute, int look, uint32_t forMs) {
   testActive = false;
   testHoldMinute = minute;
+  testHoldLook = minute >= 0 ? -1 : look;
+  testHoldEndMs = forMs ? max(millis() + forMs, (uint32_t)1) : 0;
 }
 
 void stopTestDay() {
   testActive = false;
   testHoldMinute = -1;
+  testHoldLook = -1;
+  testHoldEndMs = 0;
+}
+
+static bool holdActive() {
+  return testHoldMinute >= 0 || testHoldLook >= 0;
+}
+
+// Local wall-clock minute of the day.
+static float wallMinute(time_t now) {
+  struct tm local;
+  localtime_r(&now, &local);
+  return local.tm_hour * 60 + local.tm_min + local.tm_sec / 60.0f;
+}
+
+// Next schedule keyframe index after k, skipping the end-of-day duplicate of midnight.
+static int nextKeyframe(int k) {
+  return k + 1 >= KEYFRAME_COUNT - 1 ? 0 : k + 1;
+}
+
+// Jumps the light clock to where the next look begins and keeps it there until the wall clock catches up.
+// Fails during a test day or hold, or before the clock is set; on success names the look reached.
+bool skipToNextLook(const char** lookName, float* atMinute) {
+  time_t now = time(nullptr);
+  if (testActive || holdActive() || !clockIsSet(now) || activeSegIndex < 0) return false;
+  float wall = wallMinute(now);
+  int k = activeSegIndex;
+  const Look* current = schedule[k].look;
+  for (int step = 0; step < 2 * KEYFRAME_COUNT; step++) {
+    k = nextKeyframe(k);
+    if (schedule[k].look == current) continue;
+    float ahead = fmod(schedule[k].minute - wall + 2 * MINUTES_PER_DAY, (float)MINUTES_PER_DAY);
+    if (ahead < 1.0f) { current = schedule[k].look; continue; }
+    skipMinute = schedule[k].minute;
+    skipEndMs = max(millis() + (uint32_t)(ahead * 60000.0f), (uint32_t)1);
+    for (int i = 0; i < LOOK_COUNT; i++) if (looks[i] == schedule[k].look) *lookName = lookNames[i];
+    *atMinute = skipMinute;
+    return true;
+  }
+  return false;
+}
+
+void cancelSkip() {
+  skipMinute = -1;
+  skipEndMs = 0;
+}
+
+// The next stretch with a different name than the current one, from the light clock; false during a look hold.
+bool nextPhaseChange(const char** name, float* atMinute) {
+  if (activeSegIndex < 0) return false;
+  int k = activeSegIndex;
+  for (int step = 0; step < 2 * KEYFRAME_COUNT; step++) {
+    k = nextKeyframe(k);
+    if (strcmp(schedule[k].name, activePhase) != 0) {
+      *name = schedule[k].name;
+      *atMinute = schedule[k].minute;
+      return true;
+    }
+  }
+  return false;
 }
 
 // Updates and returns the look for this frame: test clock, wall clock, or the day look until the clock is set.
@@ -195,8 +268,17 @@ const Look& dayCycleUpdate() {
   }
 
   if (testActive && millis() - testStartMs >= MINUTES_PER_DAY * TEST_MS_PER_MINUTE) testActive = false;
+  if (testHoldEndMs && (int32_t)(millis() - testHoldEndMs) >= 0) stopTestDay();
+  if (skipEndMs && (int32_t)(millis() - skipEndMs) >= 0) cancelSkip();
 
-  if (testHoldMinute >= 0) {
+  if (testHoldLook >= 0) {
+    activeLook = *looks[testHoldLook];
+    activeSegIndex = -10 - testHoldLook;
+    activeSegT = 1.0f;
+    activeSegFrom = activeSegTo = looks[testHoldLook];
+    activePhase = lookPhases[testHoldLook];
+    activeFromClock = clockSet;
+  } else if (testHoldMinute >= 0) {
     activeMinute = testHoldMinute;
     activeLook = lookAt(activeMinute, &activePhase);
     activeFromClock = clockSet;
@@ -206,9 +288,7 @@ const Look& dayCycleUpdate() {
     activeLook = lookAt(activeMinute, &activePhase);
     activeFromClock = clockSet;
   } else if (clockSet) {
-    struct tm local;
-    localtime_r(&now, &local);
-    activeMinute = local.tm_hour * 60 + local.tm_min + local.tm_sec / 60.0f;
+    activeMinute = skipMinute >= 0 ? skipMinute : wallMinute(now);
     activeLook = lookAt(activeMinute, &activePhase);
     activeFromClock = true;
   } else {
@@ -237,6 +317,7 @@ int pickSpawnIndex() {
 
 // Intensity (0-1) for a palette colour: ramps linearly across the current transition to match the next phase.
 float colourLevel(int index) {
+  if (colourOverride[index] >= 0) return colourOverride[index] > 0 ? 1.0f : 0.0f;
   float from = activeSegFrom->weights[index] > 0.0f ? 1.0f : 0.0f;
   float to = activeSegTo->weights[index] > 0.0f ? 1.0f : 0.0f;
   return from + (to - from) * activeSegT;
@@ -244,6 +325,7 @@ float colourLevel(int index) {
 
 // True when neither end of the current transition uses this palette colour.
 bool colourAbsent(int index) {
+  if (colourOverride[index] >= 0) return colourOverride[index] == 0;
   return activeSegFrom->weights[index] <= 0.0f && activeSegTo->weights[index] <= 0.0f;
 }
 
@@ -261,6 +343,7 @@ String dayCycleStatus() {
   char buf[1024];
   char t[8], rise[8], set[8];
   formatMinute(t, sizeof(t), activeMinute);
+  if (testHoldLook >= 0) strcpy(t, "--:--");
   formatMinute(rise, sizeof(rise), sunriseMinute);
   formatMinute(set, sizeof(set), sunsetMinute);
 
@@ -272,9 +355,14 @@ String dayCycleStatus() {
     strftime(clock, sizeof(clock), "%Y-%m-%d %H:%M:%S %Z", &local);
   }
 
-  char mode[64];
-  if (testHoldMinute >= 0) {
-    snprintf(mode, sizeof(mode), "test hold (until /test/stop)");
+  char mode[64], until[24] = "until /test/stop";
+  if (testHoldEndMs) snprintf(until, sizeof(until), "%lu min left", (unsigned long)((testHoldEndMs - millis() + 59999) / 60000));
+  if (testHoldLook >= 0) {
+    snprintf(mode, sizeof(mode), "holding the %s look (%s)", lookNames[testHoldLook], until);
+  } else if (testHoldMinute >= 0) {
+    snprintf(mode, sizeof(mode), "holding %s (%s)", t, until);
+  } else if (skipMinute >= 0) {
+    snprintf(mode, sizeof(mode), "skipped ahead; the schedule catches up at %s", t);
   } else if (testActive) {
     uint32_t elapsed = (millis() - testStartMs) / 1000;
     uint32_t left = MINUTES_PER_DAY * TEST_MS_PER_MINUTE / 1000 - elapsed;
@@ -319,7 +407,7 @@ String dayCycleJson() {
     localtime_r(&now, &local);
     strftime(clock, sizeof(clock), "%Y-%m-%dT%H:%M:%S%z", &local);
   }
-  const char* mode = testHoldMinute >= 0 ? "hold" : testActive ? "test" : activeFromClock ? "schedule" : "fallback";
+  const char* mode = holdActive() ? "hold" : testActive ? "test" : skipMinute >= 0 ? "skipped" : activeFromClock ? "schedule" : "fallback";
 
   char buf[768];
   int n = snprintf(buf, sizeof(buf),
