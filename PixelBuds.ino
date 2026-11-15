@@ -474,6 +474,7 @@ void rescatterPixels() {
 
 void setup() {
   Serial.begin(9600);
+  settingsLoad();
   FastLED.addLeds<CHIP_SET, RGB_PIN, COLOR_CODE>(LEDs, RGB_LED_NUM);
   FastLED.setBrightness(BRIGHTNESS);
   FastLED.setMaxPowerInVoltsAndMilliamps(5, 500);

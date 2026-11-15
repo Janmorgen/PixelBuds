@@ -8,6 +8,7 @@
 #include "islands.h"
 #include "overrides.h"
 #include "rules.h"
+#include "settings.h"
 
 // Plain-text HTTP API on port 80. Every handler checks all its arguments before changing anything.
 
@@ -103,12 +104,13 @@ static String uptimeText() {
 }
 
 static String statusText() {
-  return dayCycleStatus() + overridesStatus() + rulesStatus() + islandStatus(currentIslandHold()) +
+  return dayCycleStatus() + scheduleSettingsStatus() + overridesStatus() + rulesStatus() + islandStatus(currentIslandHold()) +
          "uptime:      " + uptimeText() + "  build " __DATE__ " " __TIME__ "\n";
 }
 
 static String statusJson() {
-  return "{" + dayCycleJson() + "," + overridesJson() + "," + rulesJson() + "," + islandJson(currentIslandHold()) +
+  return "{" + dayCycleJson() + "," + scheduleSettingsJson() + "," + overridesJson() + "," + rulesJson() + "," +
+         islandJson(currentIslandHold()) +
          ",\"uptimeSeconds\":" + String(millis() / 1000) + ",\"build\":\"" __DATE__ " " __TIME__ "\"}";
 }
 
@@ -136,7 +138,10 @@ static const char HELP_TEXT[] =
   "/test?hold=X          X = day, golden, evening, embers or HH:MM; ?for=MIN (1-1440) ends it\n"
   "/test/stop            end a test day or hold\n"
   "\n"
-  "Settings, kept until changed:\n"
+  "Settings, kept until changed (saved across reboots):\n"
+  "/schedule             ?winddown=HH:MM ?embers=HH:MM  ?wake=MIN (0-240) ?golden=MIN (0-180)\n"
+  "                      ?sunrise=MIN ?sunset=MIN  shift the sun times, -180 to 180 (negative = earlier)\n"
+  "/schedule/reset       back to 22:00, 23:00, 60, 60, 0, 0\n"
   "/rules                ?mix=pool|pair  ?mixrate=0-100  ?life=MIN-MAX (contact frames, 1-2000)\n"
   "                      ?expire=snap|fade  ?round=on|off\n"
   "/rules/reset          back to pool, 100, 30-100, snap, off\n"
@@ -178,6 +183,7 @@ static void handleIslands() {
   if (round >= 0) ruleRound = round == 1;
   if (boost >= 0) islandBoost = boost;
   if (hold > -2) islandHoldSetting = hold;
+  settingsSave();
   sendText(200, islandStatus(currentIslandHold()) + rulesStatus());
 }
 
@@ -205,6 +211,7 @@ static void handleRules() {
   if (expire >= 0) ruleExpireFade = expire == 1;
   if (round >= 0) ruleRound = round == 1;
   if (lifeMin >= 0) { ruleLifeMin = lifeMin; ruleLifeMax = lifeMax; }
+  settingsSave();
   sendText(200, rulesStatus());
 }
 
@@ -244,6 +251,34 @@ static void handleTestStop() {
   stopTestDay();
   dayCycleUpdate();
   sendText(200, "Test day stopped.\n\n" + statusText());
+}
+
+static void handleSchedule() {
+  Check c;
+  allowOnly(c, {"winddown", "embers", "wake", "golden", "sunrise", "sunset"});
+  int windDown = scheduleWindDown, embers = scheduleEmbers;
+  long wake = scheduleWake, golden = scheduleGolden, rise = scheduleSunriseShift, set = scheduleSunsetShift;
+  if (web.hasArg("winddown") && (!parseClock(web.arg("winddown"), windDown) || windDown < 12 * 60))
+    c.fail("?winddown= takes HH:MM, 12:00 to 23:59.");
+  if (web.hasArg("embers") && !parseClock(web.arg("embers"), embers)) c.fail("?embers= takes HH:MM.");
+  if (web.hasArg("wake") && !parseInt(web.arg("wake"), 0, 240, wake)) c.fail("?wake= takes minutes, 0 to 240.");
+  if (web.hasArg("golden") && !parseInt(web.arg("golden"), 0, 180, golden)) c.fail("?golden= takes minutes, 0 to 180.");
+  if (web.hasArg("sunrise") && !parseInt(web.arg("sunrise"), -180, 180, rise))
+    c.fail("?sunrise= takes minutes, -180 to 180.");
+  if (web.hasArg("sunset") && !parseInt(web.arg("sunset"), -180, 180, set)) c.fail("?sunset= takes minutes, -180 to 180.");
+  if (c.ok() && embers < windDown) c.fail("Embers has to start at or after wind-down.");
+  if (rejected(c)) return;
+
+  scheduleWindDown = windDown;
+  scheduleEmbers = embers;
+  scheduleWake = wake;
+  scheduleGolden = golden;
+  scheduleSunriseShift = rise;
+  scheduleSunsetShift = set;
+  settingsSave();
+  rebuildSchedule();
+  dayCycleUpdate();
+  sendText(200, scheduleSettingsStatus() + "\n" + statusText());
 }
 
 // Reads ?fade=SEC (default 1 s) into ms.
@@ -368,9 +403,11 @@ static void webBegin() {
   web.on("/status.json", handleStatusJson);
   web.on("/help", []() { sendText(200, HELP_TEXT); });
   web.on("/islands", handleIslands);
-  web.on("/islands/reset", []() { if (noOptions()) { resetIslands(); sendText(200, islandStatus(currentIslandHold())); } });
+  web.on("/schedule", handleSchedule);
+  web.on("/schedule/reset", []() { if (noOptions()) { resetScheduleSettings(); settingsSave(); rebuildSchedule(); dayCycleUpdate(); sendText(200, statusText()); } });
+  web.on("/islands/reset", []() { if (noOptions()) { resetIslands(); settingsSave(); sendText(200, islandStatus(currentIslandHold())); } });
   web.on("/rules", handleRules);
-  web.on("/rules/reset", []() { if (noOptions()) { resetRules(); sendText(200, rulesStatus()); } });
+  web.on("/rules/reset", []() { if (noOptions()) { resetRules(); settingsSave(); sendText(200, rulesStatus()); } });
   web.on("/test", handleTest);
   web.on("/test/stop", handleTestStop);
   web.on("/power/off", handlePowerOff);
