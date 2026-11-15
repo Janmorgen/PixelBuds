@@ -9,6 +9,7 @@
 #include <numeric>
 // #include "alphabet.h"
 #include "network.h"
+#include "islands.h"
 
 #if defined(ARDUINO_AVR_UNO) || defined(ARDUINO_AVR_NANO_EVERY)
 // Example for Arduino UNO with input signals on pin 2 and 3
@@ -133,6 +134,24 @@ void addAvailableIndex(int x, int y){
     availableIndicies.push_back(newIndex);
 }
 
+// Claims a random free cell with minX <= x < maxX; false if there is none.
+bool takeAvailableIndexIn(int minX, int maxX, int& x, int& y) {
+  int count = 0;
+  for (auto& index : availableIndicies) if (index[0] >= minX && index[0] < maxX) count++;
+  if (count == 0) return false;
+  int pick = random(count);
+  for (auto it = availableIndicies.begin(); it != availableIndicies.end(); ++it) {
+    if ((*it)[0] < minX || (*it)[0] >= maxX) continue;
+    if (pick-- == 0) {
+      x = (*it)[0];
+      y = (*it)[1];
+      availableIndicies.erase(it);
+      return true;
+    }
+  }
+  return false;
+}
+
 std::vector<int> getRandomAvailableIndex(){
     std::vector<int> newRandomIndex;
     int randIndex = random(availableIndicies.size());
@@ -158,7 +177,10 @@ class pixel {
     void computeCycle(std::vector<pixel*> & neighbors);
     void writePixel(int rampFrames = 1);
     void randomize();
-    bool age(bool inContact);
+    bool age(int contacts);
+    bool dark();
+    void assignVariant(int v);
+    void rewardOrphans(std::vector<pixel*>& neighbors);
     std::vector<pixel*> getNeighbors();
     std::vector<pixel> getNeighbors(std::vector<pixel> prevNeighbors);
     CRGBArray<2> splitColors(CRGB A, CRGB B, int denom, int numer);
@@ -172,7 +194,7 @@ class pixel {
     //    std::vector<pixel> neighbors;
     int xPos = 0;
     int yPos = 0;
-    int turnsLived = 0;
+    float turnsLived = 0;
     int lifeTime = 100;
     int maxX = 32;
     int maxY = 8;
@@ -186,6 +208,7 @@ class pixel {
     float presence = 1.0f;       // display intensity, 0-1
     bool fadingOut = false;
     int role = 0;                // ROLE_CORE, ROLE_ARRIVING or ROLE_LEAVING
+    int variant = VARIANT_TODAY; // island-hold behaviour, see islands.h
     void expire();
     void retire();
     void updatePresence();
@@ -219,19 +242,7 @@ pixel::pixel(int x, int y, CRGB color) {
 
 void pixel::randomize() {
 
-  if (availableIndicies.size() != 0) {
-
-
-
-    //  int rand2 = random(2);
-
-
-    std::vector<int> newRandomIndex = getRandomAvailableIndex();
-
-    xPos = newRandomIndex[0];
-    yPos = newRandomIndex[1];
-
-  } else {
+  if (!takeAvailableIndexIn(this->minX, this->maxX, this->xPos, this->yPos)) {
     bool positionSet=false;
     for(int x =random(32);x<32;x++){
       for(int y=random(8);y<8;y++){
@@ -270,17 +281,51 @@ void pixel::randomize() {
 
 
 }
+bool pixel::dark() {
+  return this->color[0] < 5 && this->color[1] < 5 && this->color[2] < 5;
+}
 // Returns true once the pixel has gone dark; otherwise ages it while it touches another pixel.
-bool pixel::age(bool inContact) {
-  if (this->color[0] < 5 && this->color[1] < 5 && this->color[2] < 5) {
-    return true;
-  }
+// EDGE pixels age slower by day, and slower still with more neighbours, so islands wear from the outside.
+bool pixel::age(int contacts) {
+  if (this->dark()) return true;
 
-  if (inContact) {
-    this->turnsLived += 1;
+  if (contacts > 0) {
+    float step = 1.0f;
+    if (this->variant == VARIANT_EDGE) {
+      float hold = activeLook.islandHold;
+      step = 1.0f / ((1.0f + ISLAND_LIFE_BOOST * hold) * (1.0f + (contacts - 1) * hold));
+    }
+    this->turnsLived += step;
     this->shareTo = !(this->turnsLived > this->lifeTime);
   }
   return false;
+}
+// Sets the behaviour and, in split mode, confines the pixel to its half (EDGE left, ORPHAN right).
+void pixel::assignVariant(int v) {
+  this->variant = v;
+  this->minX = 0;
+  this->maxX = 32;
+  if (islandMode == ISLANDS_SPLIT) {
+    if (v == VARIANT_EDGE) this->maxX = 16;
+    else this->minX = 16;
+  }
+}
+// Called as this pixel dies: ORPHAN neighbours it leaves alone get a longer life by day, so their colour carries on.
+void pixel::rewardOrphans(std::vector<pixel*>& neighbors) {
+  float hold = activeLook.islandHold;
+  if (hold <= 0.0f) return;
+  for (pixel* nb : neighbors) {
+    if (nb->variant != VARIANT_ORPHAN || nb->retired || nb->fadingOut || nb->dark()) continue;
+    int others = 0;
+    for (pixel* other : nb->getNeighbors()) {
+      if (other != this && !other->dark()) others++;
+    }
+    if (others > 0) continue;
+    int bonusLife = (int)lroundf(random(30, 100) * (1.0f + ISLAND_LIFE_BOOST * hold));
+    nb->turnsLived *= 1.0f - hold;
+    nb->lifeTime = max(nb->lifeTime, (int)lroundf(nb->lifeTime + hold * (bonusLife - nb->lifeTime)));
+    nb->shareTo = nb->turnsLived <= nb->lifeTime;
+  }
 }
 // Ends the pixel's life early: it fades out, then goes dark.
 void pixel::expire() {
@@ -405,7 +450,9 @@ void pixel::splitColors(CRGB A, std::vector<pixel*>& neighbors) {
 
   CRGB output(0, 0, 0);
   for (int i = 0; i < 3; i++) {
-    output[i] = (uint8_t)min(tempCalc[i] / shareToSize, 255.0f);
+    // Optional rounding keeps long-lived islands bright but lets them pale; truncating keeps them saturated.
+    float bias = (this->variant != VARIANT_TODAY && islandRounding) ? 0.5f : 0.0f;
+    output[i] = (uint8_t)min(tempCalc[i] / shareToSize + bias, 255.0f);
   }
   this->color = this->shareTo ? output : CRGB(0, 0, 0);
 }
@@ -701,6 +748,36 @@ void checkPosition()
 
 
 
+// The behaviour a new pixel gets: in split mode, whichever half has fewer pixels.
+int nextIslandVariant() {
+  if (islandMode == ISLANDS_OFF) return VARIANT_TODAY;
+  if (islandMode == ISLANDS_EDGE) return VARIANT_EDGE;
+  if (islandMode == ISLANDS_ORPHAN) return VARIANT_ORPHAN;
+  int edge = 0, orphan = 0;
+  for (pixel& px : pixels) {
+    if (px.retired || px.fadingOut) continue;
+    if (px.variant == VARIANT_EDGE) edge++;
+    else if (px.variant == VARIANT_ORPHAN) orphan++;
+  }
+  return edge <= orphan ? VARIANT_EDGE : VARIANT_ORPHAN;
+}
+
+// Switches the island experiment and reshuffles every pixel into a fresh layout for the new mode.
+void applyIslandMode() {
+  islandModeDirty = false;
+  islandMode = islandModeRequested;
+  initAvailableIndicies();
+  FastLED.clear();
+  for (size_t i = 0; i < pixels.size(); i++) {
+    int v = VARIANT_TODAY;
+    if (islandMode == ISLANDS_EDGE) v = VARIANT_EDGE;
+    else if (islandMode == ISLANDS_ORPHAN) v = VARIANT_ORPHAN;
+    else if (islandMode == ISLANDS_SPLIT) v = i % 2 ? VARIANT_ORPHAN : VARIANT_EDGE;
+    pixels[i].assignVariant(v);
+    pixels[i].randomize();
+  }
+}
+
 void setup() {
 
   Serial.begin(9600);
@@ -746,6 +823,7 @@ void setup() {
     //      newPixel.half = true;
     //    }
     newPixel.half = true;
+    newPixel.assignVariant(nextIslandVariant());
     newPixel.randomize();
 
     //  newPixel.getNeighbors();
@@ -838,6 +916,7 @@ void reconcilePixels() {
     if (core < wantCore) { newPixel.role = ROLE_CORE; core++; }
     else if (arriving < wantArriving) { newPixel.role = ROLE_ARRIVING; arriving++; }
     else { newPixel.role = ROLE_LEAVING; leaving++; }
+    newPixel.assignVariant(nextIslandVariant());
     newPixel.randomize();
     if (newPixel.role == ROLE_CORE) newPixel.presence = 0.0f;
     pixels.push_back(newPixel);
@@ -847,6 +926,7 @@ void reconcilePixels() {
 void loop() {
   networkLoop();
   const Look& look = dayCycleUpdate();
+  if (islandModeDirty) applyIslandMode();
   moveSpeed = max(1, (int)lroundf(look.moveEvery));
   colorSpeed = max(1, (int)lroundf(look.colorEvery));
   fadeBoard((int)lroundf(look.fade));
@@ -861,7 +941,8 @@ void loop() {
     std::vector<pixel*> neighbors = pixels[i].getNeighbors();
 
     // A dark pixel respawns in the same role, unless it was fading out for good.
-    if (pixels[i].age(!neighbors.empty())) {
+    if (pixels[i].age((int)neighbors.size())) {
+      pixels[i].rewardOrphans(neighbors);
       if (pixels[i].fadingOut) {
         pixels[i].retire();
       } else {

@@ -32,12 +32,13 @@ struct Look {
   float moveEvery;               // frames between moves
   float colorEvery;              // frames between colour mixes
   float fade;                    // per-frame trail fade, 0-255
+  float islandHold;              // 0-1, how strongly the island-hold experiment applies
 };
 
-static const Look LOOK_DAY     = {100, {1.0f, 1.0f, 1.0f, 0.0f}, 30, 1, 1, 56};
-static const Look LOOK_GOLDEN  = { 70, {1.0f, 0.6f, 0.0f, 0.8f}, 24, 2, 1, 40};
-static const Look LOOK_EVENING = { 40, {1.0f, 0.3f, 0.0f, 1.0f}, 18, 3, 2, 28};
-static const Look LOOK_EMBERS  = { 10, {1.0f, 0.0f, 0.0f, 0.4f},  6, 6, 3, 16};
+static const Look LOOK_DAY     = {100, {1.0f, 1.0f, 1.0f, 0.0f}, 30, 1, 1, 56, 1};
+static const Look LOOK_GOLDEN  = { 70, {1.0f, 0.6f, 0.0f, 0.8f}, 24, 2, 1, 40, 0};
+static const Look LOOK_EVENING = { 40, {1.0f, 0.3f, 0.0f, 1.0f}, 18, 3, 2, 28, 0};
+static const Look LOOK_EMBERS  = { 10, {1.0f, 0.0f, 0.0f, 0.4f},  6, 6, 3, 16, 0};
 
 // A look pinned to a minute of the day; name labels the stretch that starts there.
 struct Keyframe {
@@ -55,6 +56,7 @@ static int scheduleYearDay = -1;
 
 static bool testActive = false;
 static uint32_t testStartMs = 0;
+static float testHoldMinute = -1;   // >= 0 pins the light clock to this minute until stopped
 
 static Look activeLook = LOOK_DAY;
 // The stretch between two keyframes that the clock is in, with linear progress 0-1 across it.
@@ -153,6 +155,7 @@ static Look lookAt(float minute, const char** phase) {
   out.moveEvery = a.look->moveEvery + (b.look->moveEvery - a.look->moveEvery) * t;
   out.colorEvery = a.look->colorEvery + (b.look->colorEvery - a.look->colorEvery) * t;
   out.fade = a.look->fade + (b.look->fade - a.look->fade) * t;
+  out.islandHold = a.look->islandHold + (b.look->islandHold - a.look->islandHold) * t;
   return out;
 }
 
@@ -163,12 +166,20 @@ static bool clockIsSet(time_t now) {
 
 // Starts a 24-minute test day at 05:00 using today's sun times.
 void startTestDay() {
+  testHoldMinute = -1;
   testActive = true;
   testStartMs = millis();
 }
 
+// Pins the light clock to one minute of the day until stopTestDay().
+void startTestHold(float minute) {
+  testActive = false;
+  testHoldMinute = minute;
+}
+
 void stopTestDay() {
   testActive = false;
+  testHoldMinute = -1;
 }
 
 // Updates and returns the look for this frame: test clock, wall clock, or the day look until the clock is set.
@@ -185,7 +196,11 @@ const Look& dayCycleUpdate() {
 
   if (testActive && millis() - testStartMs >= MINUTES_PER_DAY * TEST_MS_PER_MINUTE) testActive = false;
 
-  if (testActive) {
+  if (testHoldMinute >= 0) {
+    activeMinute = testHoldMinute;
+    activeLook = lookAt(activeMinute, &activePhase);
+    activeFromClock = clockSet;
+  } else if (testActive) {
     float elapsed = (millis() - testStartMs) / (float)TEST_MS_PER_MINUTE;
     activeMinute = fmod(TEST_START_MINUTE + elapsed, (float)MINUTES_PER_DAY);
     activeLook = lookAt(activeMinute, &activePhase);
@@ -258,7 +273,9 @@ String dayCycleStatus() {
   }
 
   char mode[64];
-  if (testActive) {
+  if (testHoldMinute >= 0) {
+    snprintf(mode, sizeof(mode), "test hold (until /test/stop)");
+  } else if (testActive) {
     uint32_t elapsed = (millis() - testStartMs) / 1000;
     uint32_t left = MINUTES_PER_DAY * TEST_MS_PER_MINUTE / 1000 - elapsed;
     snprintf(mode, sizeof(mode), "test day (%lu:%02lu left)", (unsigned long)(left / 60), (unsigned long)(left % 60));
