@@ -1,5 +1,7 @@
-// Fade-in after a move or spawn: writePixel(rampFrames) lifts the cell evenly from its colour at the move to the pixel's
-// colour, checked per write against the contract, then through loop() on an embers board with one pixel.
+// Fade-in after a move or spawn, against the writePixel contract. Sections: 1-3b unit tests of one pixel (black start, kept start
+// with the cell overwritten between writes, presence changes, a sweep of ramps/starts/targets); 3c and 3d kept start and kept
+// ramp length; 4 a loop() check on an embers board with one pixel; 5 thirty pixels through an evening-to-embers look jump at twelve
+// seeds and switch offsets, requiring ramps that cross the switch and no halved heads.
 #include "common.h"
 #include <ArxContainer.h>
 #include "PixelBuds.ino"
@@ -8,6 +10,11 @@ static int contract(int start, int shown, int j, int R) {
   if (R <= 1 || j + 1 >= R) return shown;
   return (int)lroundf(start + (shown - start) * (float)(j + 1) / R);
 }
+
+// The pixel's held ramp length; 1 on a sketch that does not keep one.
+template <class P> static auto rampLenOf(P& p, int) -> decltype((int)p.rampLen) { return (int)p.rampLen; }
+template <class P> static int rampLenOf(P&, long) { return 1; }
+template <class P> static int rampLenOf(P& p) { return rampLenOf(p, 0); }
 
 static pixel makePixel(CRGB colour, int x, int y) {
   pixel p;
@@ -158,9 +165,9 @@ int main() {
     p.xPos = X2; p.yPos = Y2; p.framesSinceMove = 0;
     LEDs[idx2] = CRGB();
     bool ok = true;
-    const int later[] = {13, 1, 40, 5, 13, 21, 2, 13, 13, 13, 13, 13, 13, 13};
+    const int writes[] = {13, 1, 40, 5, 13, 21, 2, 13, 13, 13, 13, 13, 13, 13};
     for (int j = 0; j < 14; j++) {
-      p.writePixel(j == 0 ? 13 : later[j]);
+      p.writePixel(writes[j]);
       int want[3];
       for (int c = 0; c < 3; c++) want[c] = contract(0, p.color[c], j, 13);
       ok &= checkCell("stale start", 13, j, LEDs[idx2], want);
@@ -286,44 +293,55 @@ int main() {
     printf("loop, embers: %d ramps checked (%d from a lit cell), %d bad\n", moves, litRamps, bad);
   }
 
-  // 5. Through loop(): day, then embers through a /test hold switch. Heads that stayed put must not drop by over half.
+  // 5. Through loop(): 30 pixels, evening look then embers through a /test hold switch, at 12 consecutive seeds and switch offsets 5 frames apart.
+  // Heads that stayed put (same colour and presence) must not drop by over half from the frame before; and enough heads
+  // must have a ramp running across the switch, so the check cannot pass with nothing to see.
   {
-    simRng.seed(7);
-    pixels.clear();
-    initAvailableIndicies();
-    effectsClear();
-    clearBoard();
-    for (int c = 0; c < PALETTE_SIZE; c++) colourOverride[c] = 0;
-    adjustPixels = 100;
-    for (int i = 0; i < 30; i++) { pixel np; np.randomize(); pixels.push_back(np); }
+    const char* seedEnv = getenv("FADEIN_SEED");
+    const int seed0 = seedEnv ? atoi(seedEnv) : 7;
+    int checked = 0, dips = 0, spanning = 0;
     auto brightest = [](const CRGB& c) { return (int)max(c.r, max(c.g, c.b)); };
-    auto watch = [&](int frames) {
-      int dips = 0, checked = 0;
-      for (int f = 0; f < frames; f++) {
-        std::vector<int> ox(pixels.size()), oy(pixels.size()), ob(pixels.size());
-        for (size_t i = 0; i < pixels.size(); i++) { ox[i] = pixels[i].getX(); oy[i] = pixels[i].getY(); ob[i] = brightest(LEDs[getIndex(ox[i], oy[i])]); }
+    for (int k = 0; k < 12; k++) {
+      simRng.seed(seed0 + k);
+      pixels.clear();
+      initAvailableIndicies();
+      effectsClear();
+      clearBoard();
+      for (int c = 0; c < PALETTE_SIZE; c++) colourOverride[c] = 0;
+      adjustPixels = 100;
+      for (int i = 0; i < 30; i++) { pixel np; np.randomize(); pixels.push_back(np); }
+      startTestHold(-1, 3, 0);
+      for (int f = 0; f < 800 + 5 * k; f++) loop();
+      startTestHold(-1, 2, 0);
+      for (int f = 0; f < 800 + 5 * k; f++) loop();
+      startTestHold(-1, 3, 0);
+      for (int f = 0; f < 40; f++) {
         const size_t n = pixels.size();
+        std::vector<int> ox(n), oy(n), ob(n), ofs(n);
+        std::vector<CRGB> oc(n);
+        std::vector<float> op(n);
+        for (size_t i = 0; i < n; i++) {
+          ox[i] = pixels[i].getX(); oy[i] = pixels[i].getY(); ob[i] = brightest(LEDs[getIndex(ox[i], oy[i])]);
+          oc[i] = pixels[i].color; op[i] = pixels[i].shownPresence; ofs[i] = pixels[i].framesSinceMove;
+        }
         loop();
         if (pixels.size() != n) continue;
         for (size_t i = 0; i < n; i++) {
-          if (pixels[i].getX() != ox[i] || pixels[i].getY() != oy[i]) continue;
-          const CRGB& c = pixels[i].color;
-          if (!(c.r >= 5 || c.g >= 5 || c.b >= 5)) continue;
+          pixel& p = pixels[i];
+          if (p.getX() != ox[i] || p.getY() != oy[i]) continue;
+          const int now = brightest(LEDs[getIndex(ox[i], oy[i])]);
+          if (f == 0 && ofs[i] >= 1 && ofs[i] + 1 < rampLenOf(p)) spanning++;
+          if (p.color.r != oc[i].r || p.color.g != oc[i].g || p.color.b != oc[i].b || p.shownPresence != op[i]) continue;
+          if (!(p.color.r >= 5 || p.color.g >= 5 || p.color.b >= 5)) continue;
           checked++;
-          if (ob[i] >= 40 && brightest(LEDs[getIndex(ox[i], oy[i])]) * 2 < ob[i]) dips++;
+          if (ob[i] >= 40 && now * 2 < ob[i]) dips++;
         }
       }
-      return std::make_pair(checked, dips);
-    };
-    startTestHold(-1, 3, 0);
-    for (int f = 0; f < 800; f++) loop();
-    startTestHold(-1, 0, 0);
-    for (int f = 0; f < 800; f++) loop();
-    startTestHold(-1, 3, 0);
-    const auto r = watch(40);
-    CHECK(r.first > 0, "look jump: no head-frames were checked");
-    CHECK(r.second == 0, "look jump, day to embers: %d head-frames halved from the frame before", r.second);
-    printf("look jump, day to embers: %d head-frames checked, %d halved\n", r.first, r.second);
+    }
+    CHECK(checked > 0, "look jump: no head-frames were checked");
+    CHECK(spanning >= 3, "look jump: only %d heads had a ramp running across the switch, want at least 3", spanning);
+    CHECK(dips == 0, "look jump, evening to embers: %d head-frames halved from the frame before", dips);
+    printf("look jump, evening to embers: %d head-frames checked, %d ramps across the switch, %d halved\n", checked, spanning, dips);
   }
 
   if (failures) { printf("FAILED: %d\n", failures); return 1; }
