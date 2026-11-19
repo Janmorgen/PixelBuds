@@ -13,6 +13,7 @@ void simIslandEnd(const Island&);
 
 static int warmup = 500, frames = 0, previewFrames = 0;
 static long shown = 0, stepsShown = 0, powN = 0, previewed = 0;
+static bool looping = false;   // set once setup() is done, so its show() is not counted as a step
 static uint64_t ledHash = 1469598103934665603ULL;
 static double sumLit = 0, sumSat = 0, sumVal = 0, sumPow = 0, peakPow = 0, sumIslands = 0, sumIslandSize = 0;
 static long satN = 0, islandFrames = 0, overCap = 0;
@@ -28,6 +29,7 @@ void simIslandEnd(const Island& is) {
 
 // True when the frame just shown ran a simulation step; loop() has already advanced frameInStep.
 static bool stepJustRan() {
+  if (!looping) return false;
 #ifdef FRAMES_PER_STEP
   return frameInStep == 1 % FRAMES_PER_STEP;
 #else
@@ -107,6 +109,7 @@ int main(int argc, char** argv) {
 #endif
   setup();
   startTestHold(-1, look, 0);
+  looping = true;
   for (long f = 0; f < (long)(warmup + frames) * FRAMES_PER_STEP; f++) loop();   // warmup and frames count steps
   long n = stepsShown - warmup + 1;   // steps sampled
   fprintf(out, "S lit=%.3f sat=%.4f val=%.2f pow=%.1f peakpow=%.1f islands=%.3f islandsize=%.3f frames=%ld hash=%016llx",
