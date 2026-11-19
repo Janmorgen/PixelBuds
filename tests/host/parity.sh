@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks that the sketch at HEAD simulates the same as the sketch at <base-ref> at 100 % speed: for every look 0-3,
-# seed 1-3 and effect config (none, all) the lit, sat, islands, islandsize and created figures of the S line must be
-# exactly equal after 5000 steps. frames, hash and power legitimately differ. Not part of run.sh.
+# seed 1-3 and effect config (none, all) the lit, sat, val, islands, islandsize and created figures of the S line and
+# the island-end log (E lines) must be exactly equal after 5000 steps. hash and power legitimately differ. Not part
+# of run.sh.
 # Usage: parity.sh <base-ref>
 set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: $0 <base-ref>" >&2; exit 2; }
@@ -39,18 +40,19 @@ for look in 0 1 2 3; do
     for fx in none all; do
       b="$work/base/out-$look-$seed-$fx.txt"; h="$work/head/out-$look-$seed-$fx.txt"
       diffs=""
-      for k in lit sat islands islandsize created; do
+      for k in lit sat val islands islandsize created; do
         bv="$(field "$b" $k)"; hv="$(field "$h" $k)"
         [ "$bv" = "$hv" ] || diffs="$diffs $k($bv->$hv)"
         rel="$(awk -v a="$bv" -v b="$hv" 'BEGIN { d = a - b; if (d < 0) d = -d; print (a > 0) ? d / a : 0 }')"
         maxrel[$k]="$(awk -v a="${maxrel[$k]:-0}" -v b="$rel" 'BEGIN { print (b > a) ? b : a }')"
       done
-      if [ -z "$diffs" ]; then res="equal (lit $(field "$h" lit) sat $(field "$h" sat) islands $(field "$h" islands) islandsize $(field "$h" islandsize) created $(field "$h" created))"
+      cmp -s <(grep '^E ' "$b") <(grep '^E ' "$h") || diffs="$diffs ends($(grep -c '^E ' "$b")->$(grep -c '^E ' "$h") lines)"
+      if [ -z "$diffs" ]; then res="equal (lit $(field "$h" lit) sat $(field "$h" sat) val $(field "$h" val) islands $(field "$h" islands) islandsize $(field "$h" islandsize) created $(field "$h" created) ends $(grep -c '^E ' "$h"))"
       else res="DIFFERS:$diffs"; bad=1; fi
       printf '%-4s %-4s %-5s %s\n' "$look" "$seed" "$fx" "$res"
     done
   done
 done
-for k in lit sat islands islandsize created; do echo "largest relative difference, $k: ${maxrel[$k]}"; done
+for k in lit sat val islands islandsize created; do echo "largest relative difference, $k: ${maxrel[$k]}"; done
 [ $bad -eq 0 ] && echo "PARITY OK" || echo "PARITY FAILED"
 exit $bad

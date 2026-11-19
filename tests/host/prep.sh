@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copies the sketch into <out>/sketch for a host build: from a directory, or from a ref of the repo at $PIXELBUDS_REPO.
-# The real network.h is swapped for the stub and webapi.h and secrets.h are dropped.
+# The real network.h is swapped for the stub, webapi.h is dropped and secrets.h is replaced by placeholders.
 # Usage: prep.sh <dir or ref> <out dir>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -16,6 +16,16 @@ else
 fi
 rm -f "$out/sketch/secrets.h" "$out/sketch/webapi.h"
 cp "$here/stubs/network_stub.h" "$out/sketch/network.h"
+# Placeholder secrets: the real file is gitignored and the host build needs none of its values.
+cat > "$out/sketch/secrets.h" <<'EOF'
+#pragma once
+#define WIFI_SSID "host-test"
+#define WIFI_PASSWORD "host-test"
+#define OTA_PASSWORD "host-test"
+#define TZ_INFO "UTC0"
+#define LATITUDE  0.0
+#define LONGITUDE 0.0
+EOF
 
 # Shim for a sketch from before the frame clocks (one step per frame): count the frames that run a move or a
 # mix, as moveTicks and mixTicks do in the newer sketch.
