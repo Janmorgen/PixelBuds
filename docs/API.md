@@ -202,10 +202,10 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
 | `effects.strengthSetting` | `"auto"` \| int 0–100 | The saved `strength` option |
 | `effects.boost` | number 0–5 | The saved `boost` option |
 | `effects.islandsNow` | int | Islands (two or more touching lit pixels) on the matrix right now |
-| `frames.fps` | number | LED frames per second over the last full second |
+| `frames.fps` | number | LED frames per second over the last full second. Reads 0 until the first full second after boot has passed |
 | `frames.targetFps` | number | The frame rate aimed for: 4 frames per 75 ms step, about 53.3 |
-| `frames.workAvgMs`, `frames.workMaxMs` | number | Average and worst time per frame, from the start of the frame's work to its end, over the last full second. It includes network handling, the wait in `frameShow()` for 9 ms to pass since the previous `show()` started, and `show()`. A frame has 18.75 ms |
-| `frames.late` | int | Frames since boot that started on time and whose work ran past their 18.75 ms slot. A frame that starts late because the one before overran is not counted again |
+| `frames.workAvgMs`, `frames.workMaxMs` | number | Average and worst time per frame, from the start of the frame's work to its end, over the last full second. It includes network handling, the wait in `frameShow()` for 9 ms to pass since the previous `show()` started, and `show()`. A frame has 18.75 ms. Both read 0 until the first full second after boot has passed |
+| `frames.late` | int | Frames since boot whose work ended past their 18.75 ms slot while the frame clock was on schedule. A frame that ends past its slot after the frame before it also did is not counted again, so an isolated overrun of any length counts once. When a frame ends more than 18.75 ms past its slot the clock restarts its schedule from then, and the next frame to end past its slot counts again |
 | `uptimeSeconds` | int | Seconds since boot. A drop means the board rebooted, which cleared all overrides |
 | `build` | string | Firmware compile time. Changes after a wireless update |
 

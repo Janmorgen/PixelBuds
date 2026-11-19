@@ -15,7 +15,7 @@ struct FrameStats {
   float fps;
   float workAvgMs;   // loop work per frame, network handling, show() and its gap wait included
   float workMaxMs;
-  uint32_t late;     // frames since boot that started on time and overran their slot
+  uint32_t late;     // frames since boot that ended past their slot while the clock was on schedule
 };
 static FrameStats frameStats = {0, 0, 0, 0};
 
@@ -24,6 +24,7 @@ static uint32_t statWindowUs = 0, statFrames = 0, statWorkSumUs = 0, statWorkMax
 static uint32_t lastShowUs = 0;     // when the last show() started
 static bool showStarted = false;    // whether lastShowUs is set
 static bool frameClockStarted = false;   // whether the first frame has set the deadline and stats window
+static bool frameBehind = false;   // whether the last frame ended past its slot without restarting the clock
 
 // Marks the start of a frame's work; closes the stats window once a second has passed since it opened, counting
 // frames start to start.
@@ -32,6 +33,7 @@ void frameBegin() {
   if (!frameClockStarted) {
     frameClockStarted = true;
     frameDeadlineUs = statWindowUs = frameStartUs;
+    frameBehind = false;
   }
   if (statFrames && frameStartUs - statWindowUs >= 1000000UL) {
     frameStats.fps = statFrames * 1e6f / (frameStartUs - statWindowUs);
@@ -56,8 +58,9 @@ void frameShow() {
   FastLED.show();
 }
 
-// Records the frame's work time, then waits for the next frame's slot. After a stall of more than a frame the
-// clock restarts rather than rushing to catch up.
+// Records the frame's work time, then waits for the next frame's slot. A frame that ends past its slot counts as
+// late, unless the frame before it also ended past its slot and did not restart the clock. When a frame ends more
+// than a frame past its slot the clock restarts from now rather than rushing to catch up.
 void frameEnd() {
   uint32_t work = micros() - frameStartUs;
   statFrames++;
@@ -65,13 +68,17 @@ void frameEnd() {
   if (work > statWorkMaxUs) statWorkMaxUs = work;
 
   frameDeadlineUs += FRAME_US;
-  bool startedOnTime = (int32_t)(frameStartUs - (frameDeadlineUs - FRAME_US)) <= 0;
   int32_t left = (int32_t)(frameDeadlineUs - micros());
   if (left < 0) {
-    if (startedOnTime) frameStats.late++;
-    if (left < -(int32_t)FRAME_US) frameDeadlineUs = micros();
+    if (!frameBehind) frameStats.late++;
+    frameBehind = true;
+    if (left < -(int32_t)FRAME_US) {
+      frameDeadlineUs = micros();
+      frameBehind = false;
+    }
     return;
   }
+  frameBehind = false;
   while ((left = (int32_t)(frameDeadlineUs - micros())) > 0) {
     if (left > 1000) delay(left / 1000);
     else delayMicroseconds(left);
