@@ -91,6 +91,42 @@ int main() {
     printf("presence change, ramp %2d: %s\n", R, ok ? "follows the contract" : "MISMATCH");
   }
 
+  // 3b. Sweep: many ramps, starts and targets, every write; +-1 against the contract, and exact for odd ramps
+  // (an odd ramp never lands on .5) against an integer reference that rounds half away from zero.
+  {
+    int cells = 0, off = 0, inexact = 0;
+    for (int R = 2; R <= 24; R++) {
+      for (int start = 0; start < 256; start += 17) {
+        for (int shown = 0; shown < 256; shown += 5) {
+          clearBoard();
+          const int s3[3] = {start, 255 - start, start / 2};
+          for (int c = 0; c < 3; c++) LEDs[idx][c] = s3[c];
+          pixel p = makePixel(CRGB(shown, 255 - shown, shown / 2), X, Y);
+          for (int j = 0; j < R + 2; j++) {
+            p.writePixel(R);
+            for (int c = 0; c < 3; c++) {
+              const int t = p.color[c], got = LEDs[idx][c];
+              cells++;
+              if (abs(got - contract(s3[c], t, j, R)) > 1) {
+                if (off++ < 5) CHECK(false, "sweep: ramp %d, start %d, shown %d, write %d, channel %d: cell shows %d, contract says %d", R, s3[c], t, j, c, got, contract(s3[c], t, j, R));
+              }
+              if (R % 2 == 1) {
+                int ref = t;
+                if (j + 1 < R) {
+                  const int d = t - s3[c], q = ((abs(d) * (j + 1) * 2 + R) / (2 * R));
+                  ref = s3[c] + (d < 0 ? -q : q);
+                }
+                if (got != ref && inexact++ < 5) CHECK(false, "sweep: odd ramp %d, start %d, shown %d, write %d, channel %d: cell shows %d, exact reference %d", R, s3[c], t, j, c, got, ref);
+              }
+            }
+          }
+        }
+      }
+    }
+    CHECK(off == 0 && inexact == 0, "sweep: %d cells off the contract, %d odd-ramp cells off the exact reference", off, inexact);
+    printf("sweep: %d cells, %d off the contract, %d off the exact odd-ramp reference\n", cells, off, inexact);
+  }
+
   // 4. Through loop(): embers, one isolated pixel, its head cell's brightness after each move.
   {
     pixels.clear();
@@ -108,10 +144,10 @@ int main() {
     p.setPresence(1.0f);
     p.framesSinceMove = 1000;
     pixels.push_back(p);
-    int moves = 0, bad = 0;
+    int moves = 0, bad = 0, litRamps = 0;
     for (int f = 0; f < 1500 && moves < 4; f++) {
-      static uint16_t before[RGB_LED_NUM][3];
-      memcpy(before, trail, sizeof(before));
+      static CRGB before[RGB_LED_NUM];
+      memcpy(before, LEDs, sizeof(before));
       loop();
       if (pixels.size() != 1) { CHECK(false, "loop: the board has %d pixels, want 1", (int)pixels.size()); break; }
       pixel& q = pixels[0];
@@ -120,8 +156,8 @@ int main() {
       const float moveInterval = max(1.0f, activeLook.moveEvery * FRAMES_PER_STEP);
       const int R = max(1, (int)lroundf(moveInterval) - FRAMES_PER_STEP + 1);
       const int x0 = q.getX(), y0 = q.getY(), idx2 = getIndex(x0, y0);
-      bool darkStart = true;   // a cell still glowing from an earlier visit starts above black; skip those
-      for (int c = 0; c < 3; c++) darkStart &= before[idx2][c] < (2 << 8);
+      const CRGB startColour = before[idx2];   // the cell on the frame of the move
+      const int startBright = max(startColour.r, max(startColour.g, startColour.b));
       std::vector<int> trace;
       auto bright = [&]() { return (int)max(LEDs[idx2].r, max(LEDs[idx2].g, LEDs[idx2].b)); };
       trace.push_back(bright());
@@ -133,28 +169,39 @@ int main() {
         }
         trace.push_back(bright());
       }
-      if ((int)trace.size() != R || !darkStart) continue;   // moved again or got in the way; not a clean ramp
+      if ((int)trace.size() != R) continue;   // moved again or got in the way; not a clean ramp
       const pixel& q2 = pixels[0];
       int target = 0;
-      for (int c = 0; c < 3; c++) target = max(target, (int)(uint8_t)(q2.color[c] * q2.shownPresence));
+      bool lit = false, upward = true;   // lit: the cell starts above black; upward: no channel starts above its target
+      for (int c = 0; c < 3; c++) {
+        const int t = (uint8_t)(q2.color[c] * q2.shownPresence);
+        target = max(target, t);
+        upward &= startColour[c] <= t;
+      }
+      lit = startBright > 2;
+      if (lit && !upward) continue;   // a ramp that falls on some channel has no single even step
+      if (lit) litRamps++;
       moves++;
-      const int even = (target + R - 1) / R;
-      int worstStep = 0, drops = 0;
+      const int even = (target - startBright + R - 1) / R;
+      int worstStep = trace[0] - startBright, leastStep = worstStep, drops = trace[0] < startBright;
       for (int k = 1; k < R; k++) {
         int d = trace[k] - trace[k - 1];
         if (d < 0) drops++;
         worstStep = max(worstStep, d);
+        leastStep = min(leastStep, d);
       }
-      printf("embers move %d: ramp %d frames, target %d, first %d, last %d, even step %d, biggest step %d, %d drops\n",
-             moves, R, target, trace[0], trace.back(), even, worstStep, drops);
+      printf("embers move %d: ramp %d frames, start %d, target %d, first %d, last %d, even step %d, biggest step %d, %d drops\n",
+             moves, R, startBright, target, trace[0], trace.back(), even, worstStep, drops);
       bool ok = true;
       if (drops) { CHECK(false, "move %d: brightness dropped %d times during the ramp", moves, drops); ok = false; }
-      if (worstStep > even + 1) { CHECK(false, "move %d: a frame stepped %d, the even step is %d", moves, worstStep, even); ok = false; }
+      if (worstStep > even) { CHECK(false, "move %d: a frame stepped %d, the even step is %d", moves, worstStep, even); ok = false; }
+      if (!lit && leastStep < (target - startBright) / R) { CHECK(false, "move %d: a frame stepped only %d, the even step is %d", moves, leastStep, even); ok = false; }
       if (abs(trace.back() - target) > 1) { CHECK(false, "move %d: ended at %d, want %d", moves, trace.back(), target); ok = false; }
       bad += !ok;
     }
     CHECK(moves >= 2, "loop: only %d clean ramps seen", moves);
-    printf("loop, embers: %d ramps checked, %d bad\n", moves, bad);
+    CHECK(litRamps >= 1, "loop: no ramp from a lit cell was checked");
+    printf("loop, embers: %d ramps checked (%d from a lit cell), %d bad\n", moves, litRamps, bad);
   }
 
   if (failures) { printf("FAILED: %d\n", failures); return 1; }
