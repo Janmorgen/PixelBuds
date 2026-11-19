@@ -24,7 +24,7 @@ static std::vector<int> positions() {
   return v;
 }
 
-// True if any pixel moved exactly one cell; a respawn jumps further, so it does not count.
+// True if any pixel moved exactly one cell.
 static bool stepped(const std::vector<int>& a, const std::vector<int>& b) {
   if (a.size() != b.size()) return false;
   for (size_t i = 0; i < a.size(); i++) {

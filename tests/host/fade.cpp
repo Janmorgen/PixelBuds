@@ -18,7 +18,7 @@ static int fadeOnce(int v, float fade, const bool* stepFlags, int n, int& rises)
 
 int main() {
   const float fades[] = {16, 28, 40, 56};
-  // loop() order is step frame, then three more, so a value left by a step frame sees n n n S.
+  // Frame order a value sees after a step frame: three plain frames, then a step frame.
   const bool endsAtStep[4] = {false, false, false, true};
   const bool startsAtStep[4] = {true, false, false, false};
   for (float fade : fades) {
