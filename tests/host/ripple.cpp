@@ -91,6 +91,10 @@ int main() {
   ripples.push_back({CX, CY, 0.0f, RADIUS, RIPPLE_LEVEL, CRGB(255, 0, 0)});
   for (int i = 0; i < 8; i++) loop();
   CHECK(ripples.size() == 1 && ripples[0].r > 0.0f, "no growing ring to pause");
+  if (ripples.size() != 1) {
+    printf("ripple: %d failure(s)\n", failures);
+    return 1;
+  }
   float r0 = ripples[0].r;
   paused = true;
   int rises = 0;
@@ -105,6 +109,16 @@ int main() {
   printf("pause: ring r %.3f before, %.3f after 40 paused frames, %d LED rises\n", r0, ripples.empty() ? -1.0f : ripples[0].r, rises);
   CHECK(ripples.size() == 1 && ripples[0].r == r0, "the ring grew while paused (r %.3f -> %.3f)", r0, ripples.empty() ? -1.0f : ripples[0].r);
   CHECK(rises == 0, "%d LED values rose while paused", rises);
+  // A ring just over radius 1 still lights a cell next to its centre.
+  memset(trail, 0, sizeof(trail));
+  FastLED.clear();
+  ripples.clear();
+  ripples.push_back({15.00998f, 2.9995f, 1.00000334f, RADIUS, RIPPLE_LEVEL, CRGB(255, 0, 0)});
+  drawRipples(56);
+  int near = trail[getIndex(15, 3)][0];
+  printf("band: cell next to a radius-1.000003 ring centre gets trail %d\n", near);
+  CHECK(near > 0, "a ring just over radius 1 skipped a lit cell next to its centre");
+  ripples.clear();
   printf(failures ? "ripple: %d failure(s)\n" : "ripple: ok\n", failures);
   return failures != 0;
 }

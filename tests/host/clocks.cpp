@@ -127,7 +127,7 @@ static void glide() {
   startTestHold(1050, -1, 0);
   steps(100);
   while (frameInStep != 0) loop();
-  for (pixel& p : pixels) p.fadingOut = true;   // each step now lowers every pixel's presence by 1 / PRESENCE_FADE_STEPS
+  for (pixel& p : pixels) p.fadingOut = true;   // each step now lowers every pixel's presence by 1 / PRESENCE_FADE_STEPS (DEATH_FADE_STEPS if respawning)
   showHook = checkGlide;
   steps(25);
   showHook = nullptr;

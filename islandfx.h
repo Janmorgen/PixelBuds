@@ -203,7 +203,7 @@ void drawRipples(float fade) {
       continue;
     }
     float outer = rp.r + 1.01f, inner = rp.r - 1.01f;
-    float outer2 = outer * outer, inner2 = rp.r > 1.0f ? inner * inner : 0.0f;   // cells outside this band get no light
+    float outer2 = outer * outer, inner2 = inner > 0.0f ? inner * inner : 0.0f;   // cells outside this band get no light
     for (int x = 0; x < 32; x++) {
       for (int y = 0; y < 8; y++) {
         float dx = x - rp.cx, dy = y - rp.cy, d2 = dx * dx + dy * dy;
