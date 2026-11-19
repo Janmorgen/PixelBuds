@@ -449,6 +449,7 @@ void setup() {
   randomSeed(analogRead(0));
 #endif
   initAvailableIndicies();
+  effectsClear();
   for (int a = 0; a < 30; a++) {
     pixel newPixel = pixel();
     newPixel.randomize();

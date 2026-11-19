@@ -15,6 +15,8 @@
 #define RIPPLE_MAX    12.0f  // largest ring radius, cells
 #define RIPPLE_MIN_PEAK   3  // only islands that reached this many pixels ripple
 #define RIPPLE_MIN_FRAMES 24 // and lasted this many steps (about 2 s)
+#define ISLANDS_RESERVED  256 // room kept for islands: last step's and this step's, two or more cells each
+#define SEEDS_RESERVED    256 // room kept for waiting seeds
 
 #ifndef ISLAND_END_HOOK
 #define ISLAND_END_HOOK(island)
@@ -310,9 +312,12 @@ void trackIslands() {
   islandsNow = spans.size();
 }
 
-// Forgets every island, ring and seed, as after a rescatter.
+// Forgets every island, ring and seed, as after a rescatter, keeping room for them so the run does not allocate.
 void effectsClear() {
   islands.clear();
   ripples.clear();
   seeds.clear();
+  islands.reserve(ISLANDS_RESERVED);
+  ripples.reserve(MAX_RIPPLES);
+  seeds.reserve(SEEDS_RESERVED);
 }
