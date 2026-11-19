@@ -1,6 +1,6 @@
 # PixelBuds HTTP API
 
-The developer reference for every HTTP route the PixelBuds firmware serves (the `effects` branch), for writing a remote control such as a phone app, web page or home automation. This file is the source of truth for the API: [Route index](#route-index) lists every route with its options, and [Endpoint reference](#endpoint-reference) describes each one. The firmware's own `/help` route gives a short version of the same list.
+The developer reference for every HTTP route the PixelBuds firmware serves, for writing a remote control such as a phone app, web page or home automation. This file is the source of truth for the API: [Route index](#route-index) lists every route with its options, and [Endpoint reference](#endpoint-reference) describes each one. The firmware's own `/help` route gives a short version of the same list.
 
 ## Contents
 - [Route index](#route-index)
@@ -372,7 +372,7 @@ Branch on the HTTP status code (or `ok`), not on the error text.
 ## Recommended client pattern
 
 1. On launch, `GET /status.json`. If it fails, show the board as offline.
-2. Poll `/status.json` every 2–5 s while the remote is on screen. Every second at most: requests compete with the animation.
+2. Poll `/status.json` every 2–5 s while the remote is on screen, and at most once a second. Each request is handled inside an LED frame.
 3. After any command, check for `200` and render from the reply's `status`. On an error, show `error` and keep the previous state.
 4. Watch `uptimeSeconds`: if it drops, the board rebooted and every override is gone.
 5. Show when overrides end, from `overrides.until` (or "until wake" when `power.untilMorning` is true).
@@ -394,3 +394,4 @@ These limit what a client can do today.
 - **No CORS headers.** A web page served from another origin can't read responses (native apps and `curl` are unaffected). Adding `Access-Control-Allow-Origin: *` to every response would fix it.
 - **No discovery.** The board has no stable name on the network; reserve its IP.
 - **State-changing GETs.** Link previews or browser prefetching of a command URL will run it.
+- **A slow request freezes the light.** Requests are read inside the animation loop, and the server waits up to 5 s for a request that arrives slowly or in pieces. Send each request in one go.
