@@ -478,6 +478,7 @@ static void webBegin() {
   web.on("/shuffle", []() { if (noOptions()) { shuffleRequested = true; sendOk("Shuffled."); } });
   web.on("/reset", []() { if (noOptions()) { resetOverrides(); sendOk("Overrides cleared."); } });
   web.onNotFound([]() { sendError(404, "No such endpoint: " + web.uri() + ". See /help."); });
+  web.enableDelay(false);
   web.begin();
   webStarted = true;
 }
