@@ -283,7 +283,7 @@ static float rampShown() { return activeLook.brightness * dimmerTarget(); }
 
 // A 1 minute sleep at 400 % held within golden hour; at 18 s the hold moves within the same phase. `brightens` moves
 // it from near golden (look 70) to near day (look 100); otherwise the opposite. `wrap` starts the sleep 10 s before
-// millis() wraps. Checks: shown is 0 on the last frame and stays 0; when the look brightens it never falls below the
+// millis() wraps. Checks: shown is 0 on the last frame and again within 1 s after; when the look brightens it never falls below the
 // ramp; when it dims it never rises above the ramp and is below it for at most 335 frames.
 static void sleepLookMoves(bool brightens, bool wrap = false) {
   int falls = 0;
@@ -310,9 +310,9 @@ static void sleepLookMoves(bool brightens, bool wrap = false) {
   int atEnd = shownBrightness();
   Track t = track(5000, -1, 0);
   const char* what = brightens ? "brightens" : "dims";
-  printf("sleep 1 min at 400%%, look %.0f -> %.0f at 18 s (%s): shown %d at the end, 0 after %d ms more, %d frames above "
-         "the ramp, %d below\n", before, activeLook.brightness, activePhase, atEnd, t.reached, above, below);
   const char* across = wrap ? " across the millis wrap" : "";
+  printf("sleep 1 min at 400%%%s, look %.0f -> %.0f at 18 s (%s): shown %d at the end, 0 after %d ms more, %d frames above "
+         "the ramp, %d below\n", across, before, activeLook.brightness, activePhase, atEnd, t.reached, above, below);
   CHECK(atEnd == 0, "sleep at 400%%, look %s mid-sleep%s: shown %d on the last frame, want 0", what, across, atEnd);
   if (!brightens) CHECK(below <= 335, "sleep at 400%%, look dims mid-sleep%s: %d frames below the ramp, want at most 335", across, below);
   CHECK(t.reached >= 0 && t.reached <= 1000, "sleep at 400%%, look %s mid-sleep%s: shown %d at the end, reached 0 %d ms later, "
@@ -321,7 +321,7 @@ static void sleepLookMoves(bool brightens, bool wrap = false) {
   else CHECK(above == 0, "sleep at 400%%, look dims mid-sleep%s: %d frames above the ramp, want none", across, above);
 }
 
-// An undisturbed 1 minute sleep at 400 % on day or embers follows the ramp: halfway at 30 s and never below it.
+// An undisturbed 1 minute sleep at 400 % on day or embers follows the ramp: halfway at 30 s and never below it in the first 30 s.
 static void sleepOnRamp(bool embers = false) {
   int falls = 0;
   settleLook(embers ? 3 : 0);
