@@ -86,7 +86,7 @@ void frameEnd() {
 }
 
 String frameStatus() {
-  char buf[96];
+  char buf[128];
   snprintf(buf, sizeof(buf), "frames:      %.1f fps (target %.1f)  work %.2f ms avg, %.2f ms max  late %lu\n",
            frameStats.fps, 1e6f / FRAME_US, frameStats.workAvgMs, frameStats.workMaxMs, (unsigned long)frameStats.late);
   return String(buf);
