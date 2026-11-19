@@ -211,7 +211,7 @@ void drawRipples(float fade) {
         for (int c = 0; c < 3; c++) {
           uint32_t t = trail[led][c];
           if ((t >> 8) != LEDs[led][c]) t = LEDs[led][c] << 8;
-          t = min(0xFFFFu, t + (uint32_t)(rp.colour[c] * k + 0.5f));
+          t = min((uint32_t)0xFFFF, t + (uint32_t)(rp.colour[c] * k + 0.5f));
           trail[led][c] = t;
           LEDs[led][c] = t >> 8;
         }
