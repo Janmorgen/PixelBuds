@@ -26,9 +26,9 @@ struct Look {
   float brightness;              // FastLED brightness, 0-255
   float weights[PALETTE_SIZE];   // relative chance of each spawn colour
   float pixels;                  // target pixel count
-  float moveEvery;               // frames between moves
-  float colorEvery;              // frames between colour mixes
-  float fade;                    // per-frame trail fade, 0-255
+  float moveEvery;               // simulation steps between moves
+  float colorEvery;              // simulation steps between colour mixes
+  float fade;                    // trail fade per step, 0-255
   float effectStrength;          // 0-1, how strongly the /effects settings act
 };
 

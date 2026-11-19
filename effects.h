@@ -31,7 +31,7 @@ static int effectDeath = 0;
 static int effectIsland = 0;
 static float effectBoost = EFFECT_BOOST_DEFAULT;   // how strongly each effect acts at full strength
 static float effectStrengthSetting = -1;           // < 0: strength follows the look (day only); else fixed 0-1
-static int islandsNow = 0;                         // islands on the matrix this frame, for the status
+static int islandsNow = 0;                         // islands on the matrix this step, for the status
 
 static const char* const onOffNames[] = {"off", "on"};
 

@@ -5,6 +5,7 @@
 #include <FastLED.h>
 #include <WiFi.h>
 
+#include "frameclock.h"
 #include "secrets.h"
 #include "webapi.h"
 
@@ -23,7 +24,8 @@ static void otaBegin() {
   ArduinoOTA.setPassword(OTA_PASSWORD);
 
   ArduinoOTA.onStart([]() {
-    FastLED.clear(true);
+    FastLED.clear();
+    frameShow();
     Serial.println("OTA started");
   });
   ArduinoOTA.onProgress([](unsigned int done, unsigned int total) {

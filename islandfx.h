@@ -8,22 +8,25 @@
 // Island tracking and the effects set at /effects. Included by PixelBuds.ino after the pixel class.
 
 #define MAX_RIPPLES   2
-#define SEED_FRAMES   40     // frames a seed waits for a pixel to respawn into it
+#define SEED_STEPS    40     // steps a seed waits for a pixel to respawn into it
 #define SEED_REACH    2      // cells from the island's centre a seed may land
-#define RIPPLE_SPEED  0.5f   // ring growth, cells per frame
+#define RIPPLE_SPEED  0.5f   // ring growth, cells per step
 #define RIPPLE_LEVEL  0.25f   // ring brightness at its start, relative to the island's colour
 #define RIPPLE_MAX    12.0f  // largest ring radius, cells
 #define RIPPLE_MIN_PEAK   3  // only islands that reached this many pixels ripple
-#define RIPPLE_MIN_FRAMES 24 // and lasted this many frames (about 2 s)
+#define RIPPLE_MIN_STEPS  24 // and lasted this many steps (about 2 s)
+#define PIXELS_RESERVED   256 // most pixels there can be: one per cell
+#define ISLANDS_RESERVED  256 // room kept for islands: last step's and this step's, two or more cells each
+#define SEEDS_RESERVED    256 // room kept for waiting seeds
 
 #ifndef ISLAND_END_HOOK
 #define ISLAND_END_HOOK(island)
 #endif
 
-// A group of touching lit pixels, followed from frame to frame.
+// A group of touching lit pixels, followed from step to step.
 struct Island {
   int id;
-  uint32_t born;    // frame it formed
+  uint32_t born;    // step it formed
   int size;
   int peak;         // largest size it reached
   float cx, cy;     // centre
@@ -41,14 +44,14 @@ struct Seed {
   int x, y;
   CRGB colour;
   int spawnIndex;
-  int framesLeft;
+  int stepsLeft;
 };
 
 static std::vector<Island> islands;
 static std::vector<Ripple> ripples;
 static std::vector<Seed> seeds;
 static int nextIslandId = 1;
-static uint32_t islandFrame = 0;
+static uint32_t islandStep = 0;
 
 // Effect strength in force: the look's, or the fixed setting.
 static float fxStrength() {
@@ -73,7 +76,7 @@ static CRGB pure(CRGB c) {
   return CRGB((c.r - lo) * hi / (hi - lo), (c.g - lo) * hi / (hi - lo), (c.b - lo) * hi / (hi - lo));
 }
 
-// How far one contact frame ages a pixel with `contacts` neighbours.
+// How far one contact step ages a pixel with `contacts` neighbours.
 float ageStep(int contacts) {
   if (effectAgeing != AGEING_EDGE) return 1.0f;
   float s = fxStrength();
@@ -88,8 +91,10 @@ void onPixelDeath(pixel& dying, std::vector<pixel*>& neighbors) {
     if (!lit(*nb)) continue;
 
     if (effectDeath & DEATH_ORPHAN) {
+      static std::vector<pixel*> around;
+      nb->getNeighbors(around);
       int others = 0;
-      for (pixel* other : nb->getNeighbors()) {
+      for (pixel* other : around) {
         if (other != &dying && !other->dark()) others++;
       }
       if (others == 0) {
@@ -139,11 +144,11 @@ static void onIslandEnd(const Island& is) {
     CRGB colour = pure(is.colour);
     if (!colour.r && !colour.g && !colour.b) colour = paletteColors[is.spawnIndex];
     for (int i = 0; i < count; i++) {
-      seeds.push_back({(int)lroundf(is.cx), (int)lroundf(is.cy), colour, is.spawnIndex, SEED_FRAMES});
+      seeds.push_back({(int)lroundf(is.cx), (int)lroundf(is.cy), colour, is.spawnIndex, SEED_STEPS});
     }
   }
 
-  if ((effectIsland & ISLAND_RIPPLE) && is.peak >= RIPPLE_MIN_PEAK && islandFrame - is.born >= RIPPLE_MIN_FRAMES) {
+  if ((effectIsland & ISLAND_RIPPLE) && is.peak >= RIPPLE_MIN_PEAK && islandStep - is.born >= RIPPLE_MIN_STEPS) {
     if (ripples.size() >= MAX_RIPPLES) ripples.erase(ripples.begin());
     float radius = min(RIPPLE_MAX, 2.0f + 1.5f * effectBoost * s * sqrtf((float)is.peak));
     CRGB colour = pure(is.colour);
@@ -178,13 +183,18 @@ void plantSeed(pixel& p) {
     p.yPos = bestY;
     p.color = sd.colour;
     p.spawnIndex = sd.spawnIndex;
-    p.presence = p.presenceTarget();
+    p.setPresence(p.presenceTarget());
     return;
   }
 }
 
-// Adds the expanding rings to the matrix; pixels drawn afterwards cover them.
-void drawRipples() {
+// Adds the expanding rings to the matrix and its 8.8 trail, and grows them by one frame; pixels drawn afterwards
+// cover them. `fade` is the board's fade per step: each frame adds the share that keeps a ring as bright as one
+// drawn once per step.
+void drawRipples(float fade) {
+  float keepStep = max(0.0f, 1.0f - fade / 256.0f);
+  float keepFrame = powf(keepStep, 1.0f / FRAMES_PER_STEP);
+  float perFrame = keepStep < 0.9999f ? (1.0f - keepFrame) / (1.0f - keepStep) : 1.0f / FRAMES_PER_STEP;
   for (size_t i = 0; i < ripples.size();) {
     Ripple& rp = ripples[i];
     float remaining = 1.0f - rp.r / rp.radius;
@@ -192,30 +202,54 @@ void drawRipples() {
       ripples.erase(ripples.begin() + i);
       continue;
     }
+    float outer = rp.r + 1.01f, inner = rp.r - 1.01f;
+    float outer2 = outer * outer, inner2 = inner > 0.0f ? inner * inner : 0.0f;   // cells outside this band get no light
     for (int x = 0; x < 32; x++) {
       for (int y = 0; y < 8; y++) {
-        float w = 1.0f - fabsf(hypotf(x - rp.cx, y - rp.cy) - rp.r);
+        float dx = x - rp.cx, dy = y - rp.cy, d2 = dx * dx + dy * dy;
+        if (d2 > outer2 || (inner2 > 0.0f && d2 < inner2)) continue;
+        float w = 1.0f - fabsf(hypotf(dx, dy) - rp.r);
         if (w <= 0.0f) continue;
-        float k = w * remaining * rp.level;
-        LEDs[getIndex(x, y)] += CRGB(rp.colour.r * k, rp.colour.g * k, rp.colour.b * k);
+        float k = w * remaining * rp.level * perFrame * 256.0f;
+        int led = getIndex(x, y);
+        for (int c = 0; c < 3; c++) {
+          uint32_t t = trail[led][c];
+          t = min((uint32_t)0xFFFF, t + (uint32_t)(rp.colour[c] * k + 0.5f));
+          trail[led][c] = t;
+          LEDs[led][c] = t >> 8;
+        }
       }
     }
-    rp.r += RIPPLE_SPEED;
+    rp.r += RIPPLE_SPEED / FRAMES_PER_STEP;
     i++;
   }
 }
 
-// Groups the lit pixels into islands, carries each island's identity over from the last frame
+// Groups the lit pixels into islands, carries each island's identity over from the last step
 // and runs the island effects for any that broke up without merging into another.
 void trackIslands() {
-  islandFrame++;
+  islandStep++;
   for (size_t i = 0; i < seeds.size();) {
-    if (--seeds[i].framesLeft <= 0) seeds.erase(seeds.begin() + i);
+    if (--seeds[i].stepsLeft <= 0) seeds.erase(seeds.begin() + i);
     else i++;
   }
 
   int grid[32][8];
-  std::vector<bool> member(pixels.size(), false);
+  struct Span { int start, size; };
+  static std::vector<bool> member, visited;
+  static std::vector<int> members, present;   // present: last step's islands with a member in some group now
+  static std::vector<Span> spans;
+  static bool reserved = false;
+  if (!reserved) {
+    reserved = true;
+    member.reserve(PIXELS_RESERVED);
+    visited.reserve(PIXELS_RESERVED);
+    members.reserve(PIXELS_RESERVED);
+    spans.reserve(PIXELS_RESERVED);
+    present.reserve(PIXELS_RESERVED);
+  }
+  member.assign(pixels.size(), false);
+  visited.assign(pixels.size(), false);
   for (int x = 0; x < 32; x++) for (int y = 0; y < 8; y++) grid[x][y] = -1;
   for (size_t i = 0; i < pixels.size(); i++) {
     pixel& p = pixels[i];
@@ -224,71 +258,73 @@ void trackIslands() {
     else p.islandId = 0;
   }
 
-  // Connected groups of two or more, largest first.
-  std::vector<std::vector<int>> groups;
-  std::vector<bool> visited(pixels.size(), false);
+  // Connected groups of two or more, largest first; group g is members[spans[g].start ..+ spans[g].size].
+  members.clear();
+  spans.clear();
   for (size_t i = 0; i < pixels.size(); i++) {
     if (visited[i] || !member[i]) continue;
-    std::vector<int> group = {(int)i};
+    int start = members.size();
+    members.push_back(i);
     visited[i] = true;
-    for (size_t k = 0; k < group.size(); k++) {
-      const pixel& p = pixels[group[k]];
+    for (size_t k = start; k < members.size(); k++) {
+      const pixel& p = pixels[members[k]];
       const int steps[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
       for (auto& st : steps) {
         int x = p.xPos + st[0], y = p.yPos + st[1];
         if (x < 0 || x >= 32 || y < 0 || y >= 8) continue;
         int j = grid[x][y];
-        if (j >= 0 && !visited[j]) { visited[j] = true; group.push_back(j); }
+        if (j >= 0 && !visited[j]) { visited[j] = true; members.push_back(j); }
       }
     }
-    if (group.size() >= 2) groups.push_back(group);
-    else pixels[i].islandId = 0;
+    int size = members.size() - start;
+    if (size >= 2) spans.push_back({start, size});
+    else { pixels[i].islandId = 0; members.resize(start); }
   }
-  std::sort(groups.begin(), groups.end(), [](const std::vector<int>& a, const std::vector<int>& b) {
-    return a.size() > b.size();
-  });
+  std::sort(spans.begin(), spans.end(), [](const Span& a, const Span& b) { return a.size > b.size; });
 
   for (Island& is : islands) is.seen = false;
-  std::vector<int> present;   // last frame's islands with a member in some group now
-  for (auto& group : groups) {
+  present.clear();
+  for (const Span& span : spans) {
+    const int* group = &members[span.start];
+    const int* groupEnd = group + span.size;
     // The group continues whichever unclaimed island most of its members came from.
     int bestId = 0, bestCount = 0;
-    for (int m : group) {
-      int id = pixels[m].islandId;
+    for (const int* m = group; m != groupEnd; m++) {
+      int id = pixels[*m].islandId;
       if (id == 0) continue;
       if (std::find(present.begin(), present.end(), id) == present.end()) present.push_back(id);
       bool claimed = false;
       for (Island& is : islands) if (is.id == id && is.seen) claimed = true;
       if (claimed) continue;
       int count = 0;
-      for (int o : group) count += pixels[o].islandId == id;
+      for (const int* o = group; o != groupEnd; o++) count += pixels[*o].islandId == id;
       if (count > bestCount || (count == bestCount && id < bestId)) { bestCount = count; bestId = id; }
     }
     Island* is = nullptr;
     for (Island& cand : islands) if (cand.id == bestId && bestId != 0) is = &cand;
     if (!is) {
-      islands.push_back({nextIslandId++, islandFrame, 0, 0, 0, 0, CRGB(0, 0, 0), 0, false});
+      islands.push_back({nextIslandId++, islandStep, 0, 0, 0, 0, CRGB(0, 0, 0), 0, false});
       is = &islands.back();
     }
     is->seen = true;
 
     float cx = 0, cy = 0, r = 0, g = 0, b = 0;
     int votes[PALETTE_SIZE] = {0};
-    for (int m : group) {
-      const pixel& p = pixels[m];
+    for (const int* m = group; m != groupEnd; m++) {
+      const pixel& p = pixels[*m];
       cx += p.xPos; cy += p.yPos;
       r += p.color.r; g += p.color.g; b += p.color.b;
       votes[p.spawnIndex]++;
     }
-    float n = group.size();
-    is->size = group.size();
+    float n = span.size;
+    is->size = span.size;
     is->peak = max(is->peak, is->size);
     is->cx = cx / n;
     is->cy = cy / n;
     is->colour = CRGB(r / n, g / n, b / n);
     is->spawnIndex = 0;
     for (int c = 1; c < PALETTE_SIZE; c++) if (votes[c] > votes[is->spawnIndex]) is->spawnIndex = c;
-    for (int m : group) pixels[m].islandId = is->id;
+    for (const int* m = group; m != groupEnd; m++) pixels[*m].islandId = is->id;
   }
 
   for (size_t i = 0; i < islands.size();) {
@@ -297,12 +333,15 @@ void trackIslands() {
     if (!merged) onIslandEnd(islands[i]);
     islands.erase(islands.begin() + i);
   }
-  islandsNow = groups.size();
+  islandsNow = spans.size();
 }
 
-// Forgets every island, ring and seed, as after a rescatter.
+// Forgets every island, ring and seed, as after a rescatter, keeping room for them.
 void effectsClear() {
   islands.clear();
   ripples.clear();
   seeds.clear();
+  islands.reserve(ISLANDS_RESERVED);
+  ripples.reserve(MAX_RIPPLES);
+  seeds.reserve(SEEDS_RESERVED);
 }

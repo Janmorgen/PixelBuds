@@ -62,7 +62,7 @@ Any other path returns `404`.
 | Connection | `Connection: close` on every response; one request per connection |
 | Authentication | None. Anything on the LAN can control the light |
 | CORS | No `Access-Control-Allow-Origin` header is sent (see [Known gaps](#known-gaps-for-a-remote-control)) |
-| Throughput | Requests are served one at a time, once per animation frame (about 85 ms), and only while Wi-Fi is up |
+| Throughput | Requests are served one at a time, once per LED frame (18.75 ms, about 19 ms between requests), and only while Wi-Fi is up |
 
 ## Conventions every client must follow
 
@@ -157,6 +157,7 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
     "ageing": "normal", "death": [], "island": [],
     "strength": 0.0, "strengthSetting": "auto", "boost": 2.0, "islandsNow": 2
   },
+  "frames": { "fps": 53.3, "targetFps": 53.3, "workAvgMs": 1.23, "workMaxMs": 2.34, "late": 0 },
   "uptimeSeconds": 408,
   "build": "Nov 15 2026 00:41:47"
 }
@@ -179,8 +180,8 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
 | `look.brightness` | number 0–255 | The look's brightness before the dimmer |
 | `look.pixels` | number | Target pixel count, after the `pixels` override |
 | `look.pixelsNow` | int | Pixels currently alive, including ones fading in or out |
-| `look.moveEvery`, `look.mixEvery` | number ≥ 1 | Frames between moves and between colour mixes, after overrides |
-| `look.fade` | number 0–255 | Trail fade per frame, after the `trail` override |
+| `look.moveEvery`, `look.mixEvery` | number ≥ 0.25 | Steps (75 ms) between moves and between colour mixes, after overrides. Below 1 means several per step (0.25 is the floor: one per LED frame) |
+| `look.fade` | number 0–255 | Trail fade per step (75 ms), spread over the step's four LED frames, after the `trail` override |
 | `look.weights.<colour>` | number 0–1 | Spawn weight of each colour, after `/colors`. Colours: `red`, `green`, `blue`, `amber` |
 | `schedule[]` | array | Today's keyframes in order; `at` is when the named phase starts |
 | `scheduleSettings` | object | Saved `/schedule` values. `wake`, `golden`, `sunrise` and `sunset` are minutes |
@@ -201,6 +202,10 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
 | `effects.strengthSetting` | `"auto"` \| int 0–100 | The saved `strength` option |
 | `effects.boost` | number 0–5 | The saved `boost` option |
 | `effects.islandsNow` | int | Islands (two or more touching lit pixels) on the matrix right now |
+| `frames.fps` | number | LED frames per second over the last full second. Reads 0 until the first full second after boot has passed |
+| `frames.targetFps` | number | The frame rate aimed for: 4 frames per 75 ms step, about 53.3 |
+| `frames.workAvgMs`, `frames.workMaxMs` | number | Average and worst time per frame, from the start of the frame's work to its end, over the last full second. It includes network handling, the wait in `frameShow()` for 9 ms to pass since the previous `show()` started, and `show()`. A frame has 18.75 ms. Both read 0 until the first full second after boot has passed |
+| `frames.late` | int | Frames since boot whose work ended past their 18.75 ms slot while the frame clock was on schedule. A frame that ends past its slot after the frame before it also did is not counted again, so an isolated overrun of any length counts once. When a frame ends more than 18.75 ms past its slot the clock restarts its schedule from then, and the next frame to end past its slot counts again |
 | `uptimeSeconds` | int | Seconds since boot. A drop means the board rebooted, which cleared all overrides |
 | `build` | string | Firmware compile time. Changes after a wireless update |
 
@@ -259,7 +264,7 @@ Percent changes to the current look; 100 means no change. With no options, retur
 | `trail` | 25–400 | How long trails last |
 | `mix` | 25–400 | How often colours mix |
 
-`speed` and `mix` cannot go faster than once per frame, so values above 100 have no effect in the `day` look, which already moves and mixes every frame.
+The simulation advances in 75 ms steps and the LEDs refresh four times per step (18.75 ms frames). Moves and mixes run once per frame at most, so up to four per step. Every `speed` and `mix` value from 25 to 400 changes the rate in every look, `day` included (100 % there is one move and one mix per step).
 
 #### `/colors`
 | Option | Values |
@@ -301,7 +306,7 @@ Rebuilds today's schedule immediately. A late sunset still pushes wind-down and 
 |---|---|---|
 | `mix` | `pool` (pool and split colours) or `pair` (average with each neighbour in turn) | `pool` |
 | `mixrate` | 0–100, how far each mix moves toward the shared colour; 0 stops mixing | 100 |
-| `life` | `MIN-MAX`, each 1–2000, MIN ≤ MAX: lifetime in frames spent touching another pixel | `30-100` |
+| `life` | `MIN-MAX`, each 1–2000, MIN ≤ MAX: lifetime in steps (75 ms each) spent touching another pixel | `30-100` |
 | `expire` | `snap` (goes black at end of life) or `fade` (fades out, then respawns) | `snap` |
 | `round` | `on` or `off`: rounding keeps colours brighter but paler | `off` |
 
@@ -318,7 +323,7 @@ What happens as pixels age and die, and when an island (two or more touching lit
 | `strength` | `auto` (follows the look: rises across the wake hour, full by day, falls to 0 across golden hour, 0 in evening and embers) or 0–100 to fix it in every phase | `auto` |
 | `boost` | 0–5, decimals allowed, no sign: how strongly each effect acts at full strength (edge and orphan lives, the share of life contagion takes, scatter distance, seed count, ripple size) | 2 |
 
-A list replaces the current one: `?death=orphan,scatter` turns on those two and turns `contagion` off. Changes apply from the next frame without rescattering.
+A list replaces the current one: `?death=orphan,scatter` turns on those two and turns `contagion` off. Changes apply from the next step without rescattering.
 
 #### `/islands` (old name)
 Kept for clients written against the island-hold experiment. It changes the `/effects` and `/rules` settings and replies like any settings route.

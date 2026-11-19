@@ -6,6 +6,7 @@
 
 #include "daycycle.h"
 #include "effects.h"
+#include "frameclock.h"
 #include "overrides.h"
 #include "rules.h"
 #include "settings.h"
@@ -121,13 +122,13 @@ static String uptimeText() {
 }
 
 static String statusText() {
-  return dayCycleStatus() + scheduleSettingsStatus() + overridesStatus() + rulesStatus() + effectsStatus(currentEffectStrength()) +
+  return dayCycleStatus() + scheduleSettingsStatus() + overridesStatus() + rulesStatus() + effectsStatus(currentEffectStrength()) + frameStatus() +
          "uptime:      " + uptimeText() + "  build " __DATE__ " " __TIME__ "\n";
 }
 
 static String statusJson() {
   return "{" + dayCycleJson() + "," + scheduleSettingsJson() + "," + overridesJson() + "," + rulesJson() + "," +
-         effectsJson(currentEffectStrength()) +
+         effectsJson(currentEffectStrength()) + "," + frameJson() +
          ",\"uptimeSeconds\":" + String(millis() / 1000) + ",\"build\":\"" __DATE__ " " __TIME__ "\"}";
 }
 
@@ -172,7 +173,7 @@ static const char HELP_TEXT[] =
   "/schedule             ?winddown=HH:MM ?embers=HH:MM  ?wake=MIN (0-240) ?golden=MIN (0-180)\n"
   "                      ?sunrise=MIN ?sunset=MIN  shift the sun times, -180 to 180 (negative = earlier)\n"
   "/schedule/reset       back to 22:00, 23:00, 60, 60, 0, 0\n"
-  "/rules                ?mix=pool|pair  ?mixrate=0-100  ?life=MIN-MAX (contact frames, 1-2000)\n"
+  "/rules                ?mix=pool|pair  ?mixrate=0-100  ?life=MIN-MAX (contact steps, 1-2000)\n"
   "                      ?expire=snap|fade  ?round=on|off\n"
   "/rules/reset          back to pool, 100, 30-100, snap, off\n"
   "/effects              ?ageing=normal|edge  ?death=none or a list of orphan,contagion,scatter\n"
@@ -477,6 +478,7 @@ static void webBegin() {
   web.on("/shuffle", []() { if (noOptions()) { shuffleRequested = true; sendOk("Shuffled."); } });
   web.on("/reset", []() { if (noOptions()) { resetOverrides(); sendOk("Overrides cleared."); } });
   web.onNotFound([]() { sendError(404, "No such endpoint: " + web.uri() + ". See /help."); });
+  web.enableDelay(false);
   web.begin();
   webStarted = true;
 }

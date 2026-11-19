@@ -1,5 +1,6 @@
 #include <FastLED.h>
 #include <ArxContainer.h>
+#include "frameclock.h"
 #include "network.h"
 #include "effects.h"
 #include "rules.h"
@@ -30,57 +31,57 @@ int getIndex(int x, int y) {
   return 8 * x + y + yDiff;
 }
 
-void fadeBoard(int amount) {
+static uint16_t trail[RGB_LED_NUM][3];   // the LEDs in 8.8 fixed point
 
-  fadeToBlackBy(LEDs, RGB_LED_NUM, amount);
-
-
-}
-
-
-//arx::vector<arx::vector<int>> queue;
-std::vector<std::vector<int>> availableIndicies;
-
-void initAvailableIndicies(){
-  availableIndicies.clear();
-  for (int x = 0; x < 32;x++){
-    for (int y=0;y<8;y++){
-      std::vector<int> newIndex;
-      newIndex.push_back(x);
-      newIndex.push_back(y);
-      availableIndicies.push_back(newIndex);
+// Fades the board by `perStep` (0-255, as fadeToBlackBy) per simulation step, spread evenly over the step's frames.
+void fadeBoard(float perStep, bool stepFrame) {
+  uint32_t keep = (uint32_t)(powf(1.0f - perStep / 256.0f, 1.0f / FRAMES_PER_STEP) * 65536.0f);
+  for (int i = 0; i < RGB_LED_NUM; i++) {
+    for (int c = 0; c < 3; c++) {
+      uint16_t t = trail[i][c];
+      if ((t >> 8) != LEDs[i][c]) t = LEDs[i][c] << 8;
+      t = ((uint32_t)t * keep) >> 16;
+      if (stepFrame) t &= 0xFF00;
+      trail[i][c] = t;
+      LEDs[i][c] = t >> 8;
     }
   }
 }
+
+
+// Cells no pixel occupies, in the order they were freed.
+struct Cell { int8_t x, y; };
+std::vector<Cell> availableIndicies;
+
+void initAvailableIndicies(){
+  availableIndicies.clear();
+  availableIndicies.reserve(512);
+  for (int x = 0; x < 32; x++) {
+    for (int y = 0; y < 8; y++) availableIndicies.push_back({(int8_t)x, (int8_t)y});
+  }
+}
+// Removes the cell from the free list; the entry after each one removed is not checked.
 void removeAvailableIndex(int x, int y){
-    for (std::vector<std::vector<int>>::iterator it = availableIndicies.begin();it<availableIndicies.end();it++){
-      std::vector<int> index = *it;
-        if(x==index[0] && y == index[1]){
-          availableIndicies.erase(it);
-        }
-      }
-
-
+  for (size_t i = 0; i < availableIndicies.size(); i++) {
+    if (availableIndicies[i].x == x && availableIndicies[i].y == y) availableIndicies.erase(availableIndicies.begin() + i);
+  }
 }
 
 void addAvailableIndex(int x, int y){
-    std::vector<int> newIndex;
-    newIndex.push_back(x);
-    newIndex.push_back(y);
-    availableIndicies.push_back(newIndex);
+  availableIndicies.push_back({(int8_t)x, (int8_t)y});
 }
 
 // Claims a random free cell with minX <= x < maxX; false if there is none.
 bool takeAvailableIndexIn(int minX, int maxX, int& x, int& y) {
   int count = 0;
-  for (auto& index : availableIndicies) if (index[0] >= minX && index[0] < maxX) count++;
+  for (const Cell& c : availableIndicies) if (c.x >= minX && c.x < maxX) count++;
   if (count == 0) return false;
   int pick = random(count);
   for (auto it = availableIndicies.begin(); it != availableIndicies.end(); ++it) {
-    if ((*it)[0] < minX || (*it)[0] >= maxX) continue;
+    if (it->x < minX || it->x >= maxX) continue;
     if (pick-- == 0) {
-      x = (*it)[0];
-      y = (*it)[1];
+      x = it->x;
+      y = it->y;
       availableIndicies.erase(it);
       return true;
     }
@@ -102,7 +103,7 @@ class pixel {
     void randomize();
     bool age(int contacts);
     bool dark() const;
-    std::vector<pixel*> getNeighbors();
+    void getNeighbors(std::vector<pixel*>& output);
     void splitColors(CRGB A, std::vector<pixel*>& neighbors);
     void averageColors(std::vector<pixel*> & neighbors);
     void pairColors(std::vector<pixel*>& neighbors);
@@ -121,7 +122,8 @@ class pixel {
     bool retired = false;
     int spawnIndex = 0;
     int framesSinceMove = 1000;
-    float presence = 1.0f;       // display intensity, 0-1
+    float presence = 1.0f;       // intensity, 0-1, as the simulation sees it; changes once per step
+    float shownPresence = 1.0f;  // intensity drawn, gliding to presence over the step's frames
     bool fadingOut = false;
     bool respawn = false;        // fading out at the end of its life, then respawning in place
     int role = 0;                // ROLE_CORE, ROLE_ARRIVING or ROLE_LEAVING
@@ -132,6 +134,8 @@ class pixel {
     void expire();
     void retire();
     void updatePresence();
+    void setPresence(float level);
+    void glidePresence(int framesLeft);
     float presenceTarget();
 };
 std::vector<pixel> pixels;
@@ -152,7 +156,7 @@ void pixel::randomize() {
       for(int y=random(8);y<8;y++){
         bool found=false;
 
-        for(pixel px : pixels){
+        for(const pixel& px : pixels){
           if(px.xPos==x && px.yPos==y){
             found=true;
             break;
@@ -184,7 +188,7 @@ void pixel::randomize() {
   this->respawn = false;
   this->islandId = 0;
   this->pushSteps = 0;
-  this->presence = this->presenceTarget();
+  this->setPresence(this->presenceTarget());
 
 
 }
@@ -218,7 +222,7 @@ void pixel::retire() {
   this->retired = true;
   addAvailableIndex(this->xPos, this->yPos);
 }
-#define PRESENCE_FADE_FRAMES 40   // frames for a fallback fade in or out (~3 s)
+#define PRESENCE_FADE_STEPS 40    // steps for a fallback fade in or out (~3 s)
 #define ROLE_CORE     0           // present in both phases of the transition
 #define ROLE_ARRIVING 1           // joins for the next phase, brightening across the transition
 #define ROLE_LEAVING  2           // absent from the next phase, dimming across the transition
@@ -231,16 +235,25 @@ float pixel::presenceTarget() {
   return level;
 }
 
-// Moves the display intensity toward its target, never faster than the fallback fade; a faded-out pixel goes dark.
+// Moves the intensity one step toward its target, never faster than the fallback fade; a faded-out pixel goes dark.
 void pixel::updatePresence() {
   float target = this->fadingOut ? 0.0f : this->presenceTarget();
-  float step = 1.0f / (this->respawn ? DEATH_FADE_FRAMES : PRESENCE_FADE_FRAMES);
+  float step = 1.0f / (this->respawn ? DEATH_FADE_STEPS : PRESENCE_FADE_STEPS);
   if (this->presence < target) this->presence = min(this->presence + step, target);
   else this->presence = max(this->presence - step, target);
   if (this->fadingOut && this->presence <= 0.0f) this->color = CRGB(0, 0, 0);
 }
-std::vector<pixel*> pixel::getNeighbors() {
-  std::vector<pixel*> output;
+// Sets the intensity at once, drawn as well as simulated.
+void pixel::setPresence(float level) {
+  this->presence = this->shownPresence = level;
+}
+// Moves the drawn intensity one frame toward presence, reaching it after `framesLeft` frames.
+void pixel::glidePresence(int framesLeft) {
+  this->shownPresence += (this->presence - this->shownPresence) / max(1, framesLeft);
+}
+// Fills output with the pixels orthogonally next to this one, retired ones included.
+void pixel::getNeighbors(std::vector<pixel*>& output) {
+  output.clear();
   for (pixel& px : pixels) {
     if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() >= this->minX && px.getY() >= this->minY) {
       if (((abs(px.getX() - this->xPos) == 1) && this->yPos == px.getY()) || ((abs(px.getY() - this->yPos) == 1) && this->xPos == px.getX())) {
@@ -249,11 +262,7 @@ std::vector<pixel*> pixel::getNeighbors() {
 
       }
     }
-
-
   }
-  return output;
-
 }
 
 
@@ -401,11 +410,11 @@ void pixel::computeCycle(std::vector<pixel*> & neighbors) {
     this->color = CRGB(0, 0, 0);
   }
 }
-// Writes the pixel's colour at its current intensity, fading it in over rampFrames after a move or spawn.
+// Writes the pixel's colour at its current intensity, fading it in over rampFrames frames after a move or spawn.
 void pixel::writePixel(int rampFrames) {
   CRGB& led = LEDs[getIndex(this->xPos, this->yPos)];
   CRGB shown = this->color;
-  for (int i = 0; i < 3; i++) shown[i] = (uint8_t)(this->color[i] * this->presence);
+  for (int i = 0; i < 3; i++) shown[i] = (uint8_t)(this->color[i] * this->shownPresence);
   if (rampFrames <= 1 || this->framesSinceMove + 1 >= rampFrames) {
     led = shown;
   } else {
@@ -439,15 +448,29 @@ void setup() {
   randomSeed(analogRead(0));
 #endif
   initAvailableIndicies();
+  effectsClear();
+  pixels.reserve(PIXELS_RESERVED);
   for (int a = 0; a < 30; a++) {
     pixel newPixel = pixel();
     newPixel.randomize();
     pixels.push_back(newPixel);
   }
-  FastLED.show();
+  frameShow();
 }
 
-int frameCount = 1;
+int frameInStep = 0;                            // 0 on the frames that run a simulation step
+float moveClock = FRAMES_PER_STEP - 1;          // frames counted toward the next move tick
+float mixClock = FRAMES_PER_STEP - 1;           // and toward the next mix tick
+uint32_t moveTicks = 0, mixTicks = 0;
+
+// Counts one frame on a tick clock; true when `interval` frames have passed. At most one tick per frame.
+bool tickClock(float& clock, float interval) {
+  clock += 1.0f;
+  if (clock < interval - 0.001f) return false;
+  clock -= interval;
+  if (clock >= 1.0f) clock = 0;
+  return true;
+}
 static int lastSegment = -2;
 
 // Matches the pixels to the current transition: the extra pixels of the bigger phase arrive or leave
@@ -503,35 +526,45 @@ void reconcilePixels() {
     else if (arriving < wantArriving) { newPixel.role = ROLE_ARRIVING; arriving++; }
     else { newPixel.role = ROLE_LEAVING; leaving++; }
     newPixel.randomize();
-    if (newPixel.role == ROLE_CORE) newPixel.presence = 0.0f;
+    if (newPixel.role == ROLE_CORE) newPixel.setPresence(0.0f);
     pixels.push_back(newPixel);
   }
 }
 
 void loop() {
+  frameBegin();
   networkLoop();
   const Look& look = dayCycleUpdate();
   overridesUpdate();
   if (shuffleRequested) rescatterPixels();
-  int moveSpeed = max(1, (int)lroundf(look.moveEvery));
-  int colorSpeed = max(1, (int)lroundf(look.colorEvery));
-  fadeBoard((int)lroundf(look.fade));
+  bool step = frameInStep == 0;
+  float moveInterval = max(1.0f, look.moveEvery * FRAMES_PER_STEP);
+  float mixInterval = max(1.0f, look.colorEvery * FRAMES_PER_STEP);
+  bool moveNow = !paused && tickClock(moveClock, moveInterval);
+  bool mixNow = !paused && tickClock(mixClock, mixInterval);
+  if (moveNow) moveTicks++;
+  if (mixNow) mixTicks++;
+  int ramp = max(1, (int)lroundf(moveInterval) - FRAMES_PER_STEP + 1);
+  fadeBoard(look.fade, step);
   FastLED.setBrightness(shownBrightness());
-  if (!paused) drawRipples();
+  if (!paused) drawRipples(look.fade);
 
+  static std::vector<pixel*> neighbors;
   for (size_t i = 0; i < pixels.size(); i++) {
     if (pixels[i].retired) continue;
-    std::vector<pixel*> neighbors = pixels[i].getNeighbors();
 
     // Paused pixels hold still and keep their colour and age.
     if (paused) {
-      pixels[i].updatePresence();
-      pixels[i].writePixel(moveSpeed);
+      if (step) pixels[i].updatePresence();
+      pixels[i].glidePresence(FRAMES_PER_STEP - frameInStep);
+      pixels[i].writePixel(ramp);
       continue;
     }
 
+    if (step || moveNow || mixNow) pixels[i].getNeighbors(neighbors);
+
     // A dark pixel respawns in the same role, unless it was fading out for good.
-    if (pixels[i].age((int)neighbors.size())) {
+    if (step && pixels[i].age((int)neighbors.size())) {
       onPixelDeath(pixels[i], neighbors);
       if (pixels[i].fadingOut && !pixels[i].respawn) {
         pixels[i].retire();
@@ -539,28 +572,29 @@ void loop() {
         addAvailableIndex(pixels[i].getX(), pixels[i].getY());
         pixels[i].randomize();
         plantSeed(pixels[i]);
-        pixels[i].writePixel(moveSpeed);
+        pixels[i].writePixel(ramp);
       }
       continue;
     }
-    if (frameCount % moveSpeed == 0) {
+    if (moveNow) {
       if (pixels[i].pushSteps > 0) pushStep(pixels[i]);
       else if (neighbors.empty()) pixels[i].move();
     }
-    if (frameCount % colorSpeed == 0) {
+    if (mixNow) {
       pixels[i].computeCycle(neighbors);
     }
-    pixels[i].updatePresence();
+    if (step) pixels[i].updatePresence();
+    pixels[i].glidePresence(FRAMES_PER_STEP - frameInStep);
 
     // A pixel that just went dark is left to fade with the trails rather than blanked.
     const CRGB& c = pixels[i].color;
-    if (c.r >= 5 || c.g >= 5 || c.b >= 5) pixels[i].writePixel(moveSpeed);
+    if (c.r >= 5 || c.g >= 5 || c.b >= 5) pixels[i].writePixel(ramp);
   }
-  reconcilePixels();
+  if (step) reconcilePixels();
   pixels.erase(std::remove_if(pixels.begin(), pixels.end(), [](const pixel& px) { return px.retired; }), pixels.end());
-  if (!paused) trackIslands();
+  if (step && !paused) trackIslands();
   dayCycleReportPixels(pixels.size());
-  frameCount++;
-  FastLED.show();
-  delay(75);
+  frameInStep = (frameInStep + 1) % FRAMES_PER_STEP;
+  frameShow();
+  frameEnd();
 }

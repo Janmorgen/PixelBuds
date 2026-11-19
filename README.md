@@ -29,7 +29,7 @@ Every route answers GET at `http://<board IP>/` and checks all its options befor
 ### Status
 | Route | Does |
 |---|---|
-| `/` or `/status` | Clock, phase, sun times, current look, schedule, settings and overrides |
+| `/` or `/status` | Clock, phase, sun times, current look, schedule, settings, overrides and the frame rate and timing (`frames`) |
 | `/status.json` | The same as JSON |
 | `/help` | Every route and option |
 
@@ -55,7 +55,7 @@ Kept until changed, across reboots. Each has a `/reset` route back to the defaul
 | Route | Does |
 |---|---|
 | `/schedule?winddown=HH:MM&embers=HH:MM&wake=MIN&golden=MIN&sunrise=MIN&sunset=MIN` | Fixed times, transition lengths, and shifts to the sun times (negative is earlier) |
-| `/rules?mix=pool\|pair&mixrate=0-100&life=MIN-MAX&expire=snap\|fade&round=on\|off` | How pixels share colour, how long they live (frames spent touching another pixel) and how they die |
+| `/rules?mix=pool\|pair&mixrate=0-100&life=MIN-MAX&expire=snap\|fade&round=on\|off` | How pixels share colour, how long they live (75 ms steps spent touching another pixel) and how they die |
 | `/effects?ageing=normal\|edge&death=orphan,contagion,scatter&island=seed,ripple&strength=auto\|0-100&boost=0-5` | What happens as pixels age and die and when an island of touching pixels breaks up; `death` and `island` take `none` or a list. `/islands` still works as the old name |
 
 ### Testing
