@@ -8,22 +8,22 @@
 // Island tracking and the effects set at /effects. Included by PixelBuds.ino after the pixel class.
 
 #define MAX_RIPPLES   2
-#define SEED_FRAMES   40     // frames a seed waits for a pixel to respawn into it
+#define SEED_FRAMES   40     // steps a seed waits for a pixel to respawn into it
 #define SEED_REACH    2      // cells from the island's centre a seed may land
-#define RIPPLE_SPEED  0.5f   // ring growth, cells per frame
+#define RIPPLE_SPEED  0.5f   // ring growth, cells per step
 #define RIPPLE_LEVEL  0.25f   // ring brightness at its start, relative to the island's colour
 #define RIPPLE_MAX    12.0f  // largest ring radius, cells
 #define RIPPLE_MIN_PEAK   3  // only islands that reached this many pixels ripple
-#define RIPPLE_MIN_FRAMES 24 // and lasted this many frames (about 2 s)
+#define RIPPLE_MIN_FRAMES 24 // and lasted this many steps (about 2 s)
 
 #ifndef ISLAND_END_HOOK
 #define ISLAND_END_HOOK(island)
 #endif
 
-// A group of touching lit pixels, followed from frame to frame.
+// A group of touching lit pixels, followed from step to step.
 struct Island {
   int id;
-  uint32_t born;    // frame it formed
+  uint32_t born;    // step it formed
   int size;
   int peak;         // largest size it reached
   float cx, cy;     // centre
@@ -73,7 +73,7 @@ static CRGB pure(CRGB c) {
   return CRGB((c.r - lo) * hi / (hi - lo), (c.g - lo) * hi / (hi - lo), (c.b - lo) * hi / (hi - lo));
 }
 
-// How far one contact frame ages a pixel with `contacts` neighbours.
+// How far one contact step ages a pixel with `contacts` neighbours.
 float ageStep(int contacts) {
   if (effectAgeing != AGEING_EDGE) return 1.0f;
   float s = fxStrength();
@@ -207,7 +207,7 @@ void drawRipples() {
   }
 }
 
-// Groups the lit pixels into islands, carries each island's identity over from the last frame
+// Groups the lit pixels into islands, carries each island's identity over from the last step
 // and runs the island effects for any that broke up without merging into another.
 void trackIslands() {
   islandFrame++;
@@ -256,7 +256,7 @@ void trackIslands() {
   std::sort(spans.begin(), spans.end(), [](const Span& a, const Span& b) { return a.size > b.size; });
 
   for (Island& is : islands) is.seen = false;
-  static std::vector<int> present;   // last frame's islands with a member in some group now
+  static std::vector<int> present;   // last step's islands with a member in some group now
   present.clear();
   for (const Span& span : spans) {
     const int* group = &members[span.start];

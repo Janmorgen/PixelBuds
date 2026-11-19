@@ -10,14 +10,14 @@
 #define RULE_LIFE_MIN_DEFAULT 30
 #define RULE_LIFE_MAX_DEFAULT 100
 #define RULE_LIFE_LIMIT 2000
-#define DEATH_FADE_FRAMES 12   // frames a pixel takes to fade out when its life ends with expire=fade
+#define DEATH_FADE_FRAMES 12   // steps a pixel takes to fade out when its life ends with expire=fade
 
 static const char* const mixNames[] = {"pool", "pair"};
 static const char* const expireNames[] = {"snap", "fade"};
 
 static int ruleMix = MIX_POOL;
 static int ruleMixRate = 100;                     // percent of the way each mix moves toward the shared colour
-static int ruleLifeMin = RULE_LIFE_MIN_DEFAULT;   // life range, in frames spent touching another pixel
+static int ruleLifeMin = RULE_LIFE_MIN_DEFAULT;   // life range, in steps spent touching another pixel
 static int ruleLifeMax = RULE_LIFE_MAX_DEFAULT;
 static bool ruleExpireFade = false;               // fade out when life ends in contact, rather than going black
 static bool ruleRound = false;                    // round mixes: brighter but paler colours
@@ -31,7 +31,7 @@ void resetRules() {
   ruleRound = false;
 }
 
-// A new pixel's life, in contact frames.
+// A new pixel's life, in contact steps.
 int ruleLifeTime() {
   return random(ruleLifeMin, ruleLifeMax);
 }
