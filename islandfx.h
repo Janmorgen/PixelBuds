@@ -88,8 +88,10 @@ void onPixelDeath(pixel& dying, std::vector<pixel*>& neighbors) {
     if (!lit(*nb)) continue;
 
     if (effectDeath & DEATH_ORPHAN) {
+      static std::vector<pixel*> around;
+      nb->getNeighbors(around);
       int others = 0;
-      for (pixel* other : nb->getNeighbors()) {
+      for (pixel* other : around) {
         if (other != &dying && !other->dark()) others++;
       }
       if (others == 0) {
@@ -215,7 +217,9 @@ void trackIslands() {
   }
 
   int grid[32][8];
-  std::vector<bool> member(pixels.size(), false);
+  static std::vector<bool> member, visited;
+  member.assign(pixels.size(), false);
+  visited.assign(pixels.size(), false);
   for (int x = 0; x < 32; x++) for (int y = 0; y < 8; y++) grid[x][y] = -1;
   for (size_t i = 0; i < pixels.size(); i++) {
     pixel& p = pixels[i];
@@ -224,44 +228,50 @@ void trackIslands() {
     else p.islandId = 0;
   }
 
-  // Connected groups of two or more, largest first.
-  std::vector<std::vector<int>> groups;
-  std::vector<bool> visited(pixels.size(), false);
+  // Connected groups of two or more, largest first; group g is members[spans[g].start ..+ spans[g].size].
+  struct Span { int start, size; };
+  static std::vector<int> members;
+  static std::vector<Span> spans;
+  members.clear();
+  spans.clear();
   for (size_t i = 0; i < pixels.size(); i++) {
     if (visited[i] || !member[i]) continue;
-    std::vector<int> group = {(int)i};
+    int start = members.size();
+    members.push_back(i);
     visited[i] = true;
-    for (size_t k = 0; k < group.size(); k++) {
-      const pixel& p = pixels[group[k]];
+    for (size_t k = start; k < members.size(); k++) {
+      const pixel& p = pixels[members[k]];
       const int steps[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
       for (auto& st : steps) {
         int x = p.xPos + st[0], y = p.yPos + st[1];
         if (x < 0 || x >= 32 || y < 0 || y >= 8) continue;
         int j = grid[x][y];
-        if (j >= 0 && !visited[j]) { visited[j] = true; group.push_back(j); }
+        if (j >= 0 && !visited[j]) { visited[j] = true; members.push_back(j); }
       }
     }
-    if (group.size() >= 2) groups.push_back(group);
-    else pixels[i].islandId = 0;
+    int size = members.size() - start;
+    if (size >= 2) spans.push_back({start, size});
+    else { pixels[i].islandId = 0; members.resize(start); }
   }
-  std::sort(groups.begin(), groups.end(), [](const std::vector<int>& a, const std::vector<int>& b) {
-    return a.size() > b.size();
-  });
+  std::sort(spans.begin(), spans.end(), [](const Span& a, const Span& b) { return a.size > b.size; });
 
   for (Island& is : islands) is.seen = false;
-  std::vector<int> present;   // last frame's islands with a member in some group now
-  for (auto& group : groups) {
+  static std::vector<int> present;   // last frame's islands with a member in some group now
+  present.clear();
+  for (const Span& span : spans) {
+    const int* group = &members[span.start];
+    const int* groupEnd = group + span.size;
     // The group continues whichever unclaimed island most of its members came from.
     int bestId = 0, bestCount = 0;
-    for (int m : group) {
-      int id = pixels[m].islandId;
+    for (const int* m = group; m != groupEnd; m++) {
+      int id = pixels[*m].islandId;
       if (id == 0) continue;
       if (std::find(present.begin(), present.end(), id) == present.end()) present.push_back(id);
       bool claimed = false;
       for (Island& is : islands) if (is.id == id && is.seen) claimed = true;
       if (claimed) continue;
       int count = 0;
-      for (int o : group) count += pixels[o].islandId == id;
+      for (const int* o = group; o != groupEnd; o++) count += pixels[*o].islandId == id;
       if (count > bestCount || (count == bestCount && id < bestId)) { bestCount = count; bestId = id; }
     }
     Island* is = nullptr;
@@ -274,21 +284,21 @@ void trackIslands() {
 
     float cx = 0, cy = 0, r = 0, g = 0, b = 0;
     int votes[PALETTE_SIZE] = {0};
-    for (int m : group) {
-      const pixel& p = pixels[m];
+    for (const int* m = group; m != groupEnd; m++) {
+      const pixel& p = pixels[*m];
       cx += p.xPos; cy += p.yPos;
       r += p.color.r; g += p.color.g; b += p.color.b;
       votes[p.spawnIndex]++;
     }
-    float n = group.size();
-    is->size = group.size();
+    float n = span.size;
+    is->size = span.size;
     is->peak = max(is->peak, is->size);
     is->cx = cx / n;
     is->cy = cy / n;
     is->colour = CRGB(r / n, g / n, b / n);
     is->spawnIndex = 0;
     for (int c = 1; c < PALETTE_SIZE; c++) if (votes[c] > votes[is->spawnIndex]) is->spawnIndex = c;
-    for (int m : group) pixels[m].islandId = is->id;
+    for (const int* m = group; m != groupEnd; m++) pixels[*m].islandId = is->id;
   }
 
   for (size_t i = 0; i < islands.size();) {
@@ -297,7 +307,7 @@ void trackIslands() {
     if (!merged) onIslandEnd(islands[i]);
     islands.erase(islands.begin() + i);
   }
-  islandsNow = groups.size();
+  islandsNow = spans.size();
 }
 
 // Forgets every island, ring and seed, as after a rescatter.

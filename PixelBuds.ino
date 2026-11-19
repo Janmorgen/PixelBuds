@@ -38,49 +38,39 @@ void fadeBoard(int amount) {
 }
 
 
-//arx::vector<arx::vector<int>> queue;
-std::vector<std::vector<int>> availableIndicies;
+// Cells no pixel occupies, in the order they were freed.
+struct Cell { int8_t x, y; };
+std::vector<Cell> availableIndicies;
 
 void initAvailableIndicies(){
   availableIndicies.clear();
-  for (int x = 0; x < 32;x++){
-    for (int y=0;y<8;y++){
-      std::vector<int> newIndex;
-      newIndex.push_back(x);
-      newIndex.push_back(y);
-      availableIndicies.push_back(newIndex);
-    }
+  availableIndicies.reserve(512);
+  for (int x = 0; x < 32; x++) {
+    for (int y = 0; y < 8; y++) availableIndicies.push_back({(int8_t)x, (int8_t)y});
   }
 }
+// Removes the cell from the free list; the entry after each one removed is not checked.
 void removeAvailableIndex(int x, int y){
-    for (std::vector<std::vector<int>>::iterator it = availableIndicies.begin();it<availableIndicies.end();it++){
-      std::vector<int> index = *it;
-        if(x==index[0] && y == index[1]){
-          availableIndicies.erase(it);
-        }
-      }
-
-
+  for (size_t i = 0; i < availableIndicies.size(); i++) {
+    if (availableIndicies[i].x == x && availableIndicies[i].y == y) availableIndicies.erase(availableIndicies.begin() + i);
+  }
 }
 
 void addAvailableIndex(int x, int y){
-    std::vector<int> newIndex;
-    newIndex.push_back(x);
-    newIndex.push_back(y);
-    availableIndicies.push_back(newIndex);
+  availableIndicies.push_back({(int8_t)x, (int8_t)y});
 }
 
 // Claims a random free cell with minX <= x < maxX; false if there is none.
 bool takeAvailableIndexIn(int minX, int maxX, int& x, int& y) {
   int count = 0;
-  for (auto& index : availableIndicies) if (index[0] >= minX && index[0] < maxX) count++;
+  for (const Cell& c : availableIndicies) if (c.x >= minX && c.x < maxX) count++;
   if (count == 0) return false;
   int pick = random(count);
   for (auto it = availableIndicies.begin(); it != availableIndicies.end(); ++it) {
-    if ((*it)[0] < minX || (*it)[0] >= maxX) continue;
+    if (it->x < minX || it->x >= maxX) continue;
     if (pick-- == 0) {
-      x = (*it)[0];
-      y = (*it)[1];
+      x = it->x;
+      y = it->y;
       availableIndicies.erase(it);
       return true;
     }
@@ -102,7 +92,7 @@ class pixel {
     void randomize();
     bool age(int contacts);
     bool dark() const;
-    std::vector<pixel*> getNeighbors();
+    void getNeighbors(std::vector<pixel*>& output);
     void splitColors(CRGB A, std::vector<pixel*>& neighbors);
     void averageColors(std::vector<pixel*> & neighbors);
     void pairColors(std::vector<pixel*>& neighbors);
@@ -152,7 +142,7 @@ void pixel::randomize() {
       for(int y=random(8);y<8;y++){
         bool found=false;
 
-        for(pixel px : pixels){
+        for(const pixel& px : pixels){
           if(px.xPos==x && px.yPos==y){
             found=true;
             break;
@@ -239,8 +229,9 @@ void pixel::updatePresence() {
   else this->presence = max(this->presence - step, target);
   if (this->fadingOut && this->presence <= 0.0f) this->color = CRGB(0, 0, 0);
 }
-std::vector<pixel*> pixel::getNeighbors() {
-  std::vector<pixel*> output;
+// Fills output with the pixels orthogonally next to this one, retired ones included.
+void pixel::getNeighbors(std::vector<pixel*>& output) {
+  output.clear();
   for (pixel& px : pixels) {
     if (px.getX() < this->maxX && px.getY() < this->maxY && px.getX() >= this->minX && px.getY() >= this->minY) {
       if (((abs(px.getX() - this->xPos) == 1) && this->yPos == px.getY()) || ((abs(px.getY() - this->yPos) == 1) && this->xPos == px.getX())) {
@@ -249,11 +240,7 @@ std::vector<pixel*> pixel::getNeighbors() {
 
       }
     }
-
-
   }
-  return output;
-
 }
 
 
@@ -519,9 +506,10 @@ void loop() {
   FastLED.setBrightness(shownBrightness());
   if (!paused) drawRipples();
 
+  static std::vector<pixel*> neighbors;
   for (size_t i = 0; i < pixels.size(); i++) {
     if (pixels[i].retired) continue;
-    std::vector<pixel*> neighbors = pixels[i].getNeighbors();
+    pixels[i].getNeighbors(neighbors);
 
     // Paused pixels hold still and keep their colour and age.
     if (paused) {
