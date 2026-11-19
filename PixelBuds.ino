@@ -122,6 +122,7 @@ class pixel {
     bool retired = false;
     int spawnIndex = 0;
     int framesSinceMove = 1000;
+    CRGB rampStart = CRGB(0, 0, 0);  // cell colour at the first write after a move
     float presence = 1.0f;       // intensity, 0-1, as the simulation sees it; changes once per step
     float shownPresence = 1.0f;  // intensity drawn, gliding to presence over the step's frames
     bool fadingOut = false;
@@ -421,7 +422,12 @@ void pixel::writePixel(int rampFrames) {
   if (rampFrames <= 1 || this->framesSinceMove + 1 >= rampFrames) {
     led = shown;
   } else {
-    led = blend(led, shown, (uint8_t)(255 * (this->framesSinceMove + 1) / rampFrames));
+    if (this->framesSinceMove == 0) this->rampStart = led;
+    int j1 = this->framesSinceMove + 1;
+    for (int i = 0; i < 3; i++) {
+      int num = this->rampStart[i] * rampFrames + ((int)shown[i] - (int)this->rampStart[i]) * j1;
+      led[i] = (uint8_t)((2 * num + rampFrames) / (2 * rampFrames));
+    }
   }
   if (this->framesSinceMove < 1000) this->framesSinceMove++;
 }
