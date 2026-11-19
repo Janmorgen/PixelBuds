@@ -116,7 +116,7 @@ The light has three layers. A remote control should present them separately.
 - During a hold (`/test?hold=`) the phase never changes, so overrides last until the hold ends.
 - Changing `/schedule` can move the current time into a different phase, which clears overrides.
 
-**Brightness shown** = `look.brightness` × `power.dimmer`, at most 255. The dimmer combines power, the brightness override and the sleep ramp, and glides to new values: about 1 s for brightness changes, 3 s when overrides clear, and the requested fade for power.
+**Brightness shown** = `look.brightness` × `power.dimmer`, at most 255. The dimmer combines power, the brightness override and the sleep ramp, and glides to new values: about 1 s for brightness changes, 3 s when overrides clear, and the requested fade for power. It never goes above the point where the look reaches 255, so a fade, sleep or glide from a high setting starts dimming at once instead of holding at 255 first; only the power cap (see [`/brightness`](#brightness)) can still hold a bright frame level for the start of a fade.
 
 ## The status object
 
@@ -188,7 +188,7 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
 | `power.on` | bool | `false` while powered off (including after a sleep timer finishes) |
 | `power.untilMorning` | bool | The power-off lasts until wake rather than the next phase |
 | `power.sleepSecondsLeft` | int \| null | Seconds until a running sleep timer reaches off |
-| `power.dimmer` | number 0–4 | The share of the look's brightness being shown right now; above 1 is brighter than the look. It glides, so a command's reply shows where the glide starts; `overrides.brightness` and `power.on` show the target |
+| `power.dimmer` | number 0–4, at most 255 ÷ `look.brightness` | The multiplier on the look's brightness right now; above 1 is brighter than the look. It stops at the headroom where the look reaches 255, so on `day` (brightness 100) it is at most 2.55 even at 400 %. It glides, so a command's reply shows where the glide starts; `overrides.brightness` shows the requested percent (such as 400) and `power.on` the target |
 | `overrides.brightness` | int 0–400 | Brightness override, percent; 100 means no change |
 | `overrides.speed`, `.pixels`, `.trail`, `.mix` | int | `/adjust` percentages; 100 means no change |
 | `overrides.colors.<colour>` | int 0–100 \| null | Colour override; `null` means the schedule decides |
@@ -245,7 +245,7 @@ Turns the light on and cancels power-off (including `until=morning`) and any sle
 |---|---|---|
 | `scale` | percent, 0–400 | none: with no option, returns the current override status |
 
-Percent of the current look's brightness. Above 100 makes the light brighter than the look, up to the matrix's maximum of 255. The firmware also caps the matrix at 5 V, 500 mA, and FastLED dims the whole frame to stay under it, so a bright day look can't reach 255.
+Percent of the current look's brightness. Above 100 makes the light brighter than the look, up to the matrix's maximum of 255. The firmware also caps the matrix at 5 V, 500 mA, and FastLED dims the whole frame to stay under it. At high settings the day and golden looks show less than asked, and so can evening when effects that add light (such as ripple) are on; embers stays under the cap at 400 %.
 
 #### `/sleep`
 | Option | Values | Default |

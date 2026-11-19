@@ -26,16 +26,27 @@ static int adjustMix = 100;      // percent of the look's mixing rate
 static bool paused = false;
 static bool shuffleRequested = false;
 
-static float dimmer = 1.0f;          // shown multiple of the look's brightness, 0-4
+static float dimmer = 1.0f;          // shown multiple of the look's brightness, 0-4, at most dimmerHeadroom()
 static float dimmerRate = 0.001f;    // largest dimmer change per millisecond
 static uint32_t dimmerLastMs = 0;
+static float dimmerLastHeadroom = 1e9f;   // dimmerHeadroom() on the previous frame
 static char overridePhase[24] = "";  // phase the overrides were last checked against
 static float scheduledEffectStrength = 0;  // the look's effect strength before the /effects setting
 
-// The dimmer the overrides ask for right now, 0-4.
+// The dimmer at which the look reaches 255; no limit for a dark look.
+static float dimmerHeadroom() {
+  return activeLook.brightness > 0.0f ? 255.0f / activeLook.brightness : 1e9f;
+}
+
+// The brightness override as a dimmer, at most the headroom.
+static float dimmerLevel() {
+  return min(brightnessPct / 100.0f, dimmerHeadroom());
+}
+
+// The dimmer the overrides ask for right now, 0 to dimmerLevel().
 static float dimmerTarget() {
   if (powerOff) return 0.0f;
-  float level = brightnessPct / 100.0f;
+  float level = dimmerLevel();
   if (sleepActive) level *= max(0.0f, 1.0f - (millis() - sleepStartMs) / (float)sleepLengthMs);
   return level;
 }
@@ -65,7 +76,7 @@ void startSleep(int minutes) {
   sleepLengthMs = minutes * 60000UL;
   powerOff = false;
   powerUntilMorning = false;
-  dimmerRate = 1.0f / GLIDE_MS_CHANGE;
+  glideOver(GLIDE_MS_CHANGE);
 }
 
 // Clears the overrides that last only for one phase.
@@ -94,6 +105,11 @@ static float scaleTrail(float fade, int pct) {
 
 // Call once per frame after dayCycleUpdate(): ends overrides on a phase change and applies the rest to activeLook.
 void overridesUpdate() {
+  float headroom = dimmerHeadroom();
+  bool atHeadroom = dimmer >= dimmerLastHeadroom;
+  dimmerLastHeadroom = headroom;
+  if (dimmer > headroom) dimmer = headroom;
+
   if (strcmp(overridePhase, activePhase) != 0) {
     bool morning = strcmp(activePhase, "wake") == 0 || strcmp(activePhase, "day") == 0;
     if (overridePhase[0]) {
@@ -102,6 +118,7 @@ void overridesUpdate() {
     }
     strncpy(overridePhase, activePhase, sizeof(overridePhase) - 1);
   }
+  float rate = sleepActive ? max(dimmerRate, dimmerLevel() / sleepLengthMs) : dimmerRate;
   if (sleepActive && millis() - sleepStartMs >= sleepLengthMs) {
     sleepActive = false;
     powerOff = true;
@@ -109,9 +126,10 @@ void overridesUpdate() {
   }
 
   uint32_t now = millis();
-  float step = dimmerRate * (now - dimmerLastMs);
+  float step = rate * (now - dimmerLastMs);
   dimmerLastMs = now;
   float target = dimmerTarget();
+  if (atHeadroom && target > dimmer) step = max(step, headroom - dimmer);   // a dimmer at the headroom follows it up
   dimmer = dimmer < target ? min(dimmer + step, target) : max(dimmer - step, target);
 
   activeLook.moveEvery *= 100.0f / adjustSpeed;
