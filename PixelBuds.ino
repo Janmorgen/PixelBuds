@@ -123,7 +123,8 @@ class pixel {
     bool retired = false;
     int spawnIndex = 0;
     int framesSinceMove = 1000;
-    float presence = 1.0f;       // display intensity, 0-1
+    float presence = 1.0f;       // intensity, 0-1, as the simulation sees it; changes once per step
+    float shownPresence = 1.0f;  // intensity drawn, gliding to presence over the step's frames
     bool fadingOut = false;
     bool respawn = false;        // fading out at the end of its life, then respawning in place
     int role = 0;                // ROLE_CORE, ROLE_ARRIVING or ROLE_LEAVING
@@ -134,6 +135,8 @@ class pixel {
     void expire();
     void retire();
     void updatePresence();
+    void setPresence(float level);
+    void glidePresence(int framesLeft);
     float presenceTarget();
 };
 std::vector<pixel> pixels;
@@ -186,7 +189,7 @@ void pixel::randomize() {
   this->respawn = false;
   this->islandId = 0;
   this->pushSteps = 0;
-  this->presence = this->presenceTarget();
+  this->setPresence(this->presenceTarget());
 
 
 }
@@ -233,14 +236,21 @@ float pixel::presenceTarget() {
   return level;
 }
 
-// Moves the display intensity one frame toward its target, never faster than the fallback fade; a faded-out
-// pixel goes dark.
+// Moves the intensity one step toward its target, never faster than the fallback fade; a faded-out pixel goes dark.
 void pixel::updatePresence() {
   float target = this->fadingOut ? 0.0f : this->presenceTarget();
-  float step = 1.0f / ((this->respawn ? DEATH_FADE_FRAMES : PRESENCE_FADE_FRAMES) * FRAMES_PER_STEP);
+  float step = 1.0f / (this->respawn ? DEATH_FADE_FRAMES : PRESENCE_FADE_FRAMES);
   if (this->presence < target) this->presence = min(this->presence + step, target);
   else this->presence = max(this->presence - step, target);
   if (this->fadingOut && this->presence <= 0.0f) this->color = CRGB(0, 0, 0);
+}
+// Sets the intensity at once, drawn as well as simulated.
+void pixel::setPresence(float level) {
+  this->presence = this->shownPresence = level;
+}
+// Moves the drawn intensity one frame toward presence, reaching it after `framesLeft` frames.
+void pixel::glidePresence(int framesLeft) {
+  this->shownPresence += (this->presence - this->shownPresence) / max(1, framesLeft);
 }
 // Fills output with the pixels orthogonally next to this one, retired ones included.
 void pixel::getNeighbors(std::vector<pixel*>& output) {
@@ -405,7 +415,7 @@ void pixel::computeCycle(std::vector<pixel*> & neighbors) {
 void pixel::writePixel(int rampFrames) {
   CRGB& led = LEDs[getIndex(this->xPos, this->yPos)];
   CRGB shown = this->color;
-  for (int i = 0; i < 3; i++) shown[i] = (uint8_t)(this->color[i] * this->presence);
+  for (int i = 0; i < 3; i++) shown[i] = (uint8_t)(this->color[i] * this->shownPresence);
   if (rampFrames <= 1 || this->framesSinceMove + 1 >= rampFrames) {
     led = shown;
   } else {
@@ -514,7 +524,7 @@ void reconcilePixels() {
     else if (arriving < wantArriving) { newPixel.role = ROLE_ARRIVING; arriving++; }
     else { newPixel.role = ROLE_LEAVING; leaving++; }
     newPixel.randomize();
-    if (newPixel.role == ROLE_CORE) newPixel.presence = 0.0f;
+    if (newPixel.role == ROLE_CORE) newPixel.setPresence(0.0f);
     pixels.push_back(newPixel);
   }
 }
@@ -543,7 +553,8 @@ void loop() {
 
     // Paused pixels hold still and keep their colour and age.
     if (paused) {
-      pixels[i].updatePresence();
+      if (step) pixels[i].updatePresence();
+      pixels[i].glidePresence(FRAMES_PER_STEP - frameInStep);
       pixels[i].writePixel(ramp);
       continue;
     }
@@ -570,7 +581,8 @@ void loop() {
     if (mixNow) {
       pixels[i].computeCycle(neighbors);
     }
-    pixels[i].updatePresence();
+    if (step) pixels[i].updatePresence();
+    pixels[i].glidePresence(FRAMES_PER_STEP - frameInStep);
 
     // A pixel that just went dark is left to fade with the trails rather than blanked.
     const CRGB& c = pixels[i].color;

@@ -180,7 +180,7 @@ void plantSeed(pixel& p) {
     p.yPos = bestY;
     p.color = sd.colour;
     p.spawnIndex = sd.spawnIndex;
-    p.presence = p.presenceTarget();
+    p.setPresence(p.presenceTarget());
     return;
   }
 }
