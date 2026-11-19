@@ -153,7 +153,7 @@ static void sleepFrom400() {
   startSleep(1);
   Track t = track(62000, 255, 0);
   printf("sleep 1 min from 400%%: left 255 after %d ms, reached 0 after %d ms\n", t.left, t.reached);
-  CHECK(t.left >= 0 && t.left <= 300, "sleep from 400%%: shown held 255 for %d ms, want under one brightness step (235 ms)", t.left);
+  CHECK(t.left >= 0 && t.left <= 235, "sleep from 400%%: shown held 255 for %d ms, want under one brightness step (235 ms)", t.left);
   CHECK(t.reached >= 59800 && t.reached <= 60000 + frameMs, "sleep from 400%%: reached 0 after %d ms, want 60000", t.reached);
 }
 
@@ -278,6 +278,61 @@ static void sleepUnderHeadroom() {
   }
 }
 
+// The shown brightness the sleep ramp asks for right now.
+static float rampShown() { return activeLook.brightness * dimmerTarget(); }
+
+// A 1 minute sleep at 400 % held within golden hour; at 18 s the hold moves within the same phase. `brightens` moves
+// it from near golden (look 70) to near day (look 100), so the headroom falls below the dimmer's ramp; otherwise the
+// opposite. The shown brightness is 0 within 1 s of the end; when the look brightens it never falls below the ramp,
+// and when the look dims it never rises above it.
+static void sleepLookMoves(bool brightens) {
+  int falls = 0;
+  float dayEnd = schedule[3].minute + 0.01f, goldenEnd = schedule[4].minute - 0.01f;
+  holdMinute(brightens ? goldenEnd : dayEnd);
+  settle(400, false, &falls);
+  float before = activeLook.brightness;
+  startSleep(1);
+  bool moved = false;
+  int above = 0, below = 0;
+  for (uint32_t t0 = millis(); millis() - t0 < 60000;) {
+    if (!moved && millis() - t0 >= 18000) {
+      startTestHold(brightens ? dayEnd : goldenEnd, -1, 0);
+      moved = true;
+    }
+    loop();
+    if (shownBrightness() > lroundf(rampShown()) + 1) above++;
+    if (shownBrightness() < lroundf(rampShown()) - 1) below++;
+  }
+  int atEnd = shownBrightness();
+  Track t = track(5000, -1, 0);
+  const char* what = brightens ? "brightens" : "dims";
+  printf("sleep 1 min at 400%%, look %.0f -> %.0f at 18 s (%s): shown %d at the end, 0 after %d ms more, %d frames above "
+         "the ramp, %d below\n", before, activeLook.brightness, activePhase, atEnd, t.reached, above, below);
+  CHECK(t.reached >= 0 && t.reached <= 1000, "sleep at 400%%, look %s mid-sleep: shown %d at the end, reached 0 %d ms later, "
+        "want within 1 s", what, atEnd, t.reached);
+  if (brightens) CHECK(below == 0, "sleep at 400%%, look brightens mid-sleep: %d frames below the ramp, want none", below);
+  else CHECK(above == 0, "sleep at 400%%, look dims mid-sleep: %d frames above the ramp, want none", above);
+}
+
+// An undisturbed 1 minute sleep at 400 % on day follows the ramp: halfway at 30 s and never below it.
+static void sleepOnRamp() {
+  int falls = 0;
+  settleLook(0);
+  settle(400, false, &falls);
+  float half = activeLook.brightness * dimmerLevel() / 2;
+  startSleep(1);
+  int below = 0;
+  for (uint32_t t0 = millis(); millis() - t0 < 30000;) {
+    loop();
+    if (shownBrightness() < lroundf(rampShown()) - 1) below++;
+  }
+  printf("sleep 1 min at 400%% on day: shown %d at 30 s, ramp halfway %.1f, %d frames below the ramp\n", shownBrightness(),
+         half, below);
+  CHECK(fabsf(shownBrightness() - half) <= 1.0f, "sleep at 400%%: shown %d at 30 s, want %.1f (the ramp's halfway)",
+        shownBrightness(), half);
+  CHECK(below == 0, "sleep at 400%%: %d frames below the ramp in the first 30 s, want none", below);
+}
+
 // In wake the look brightens from embers to day, so the headroom falls below a 400 % dimmer; a power-off fade then
 // starts at once.
 static void fallingHeadroom() {
@@ -316,6 +371,9 @@ int main() {
   fallToEmbers();
   sleepUnderHeadroom();
   fallingHeadroom();
+  sleepLookMoves(true);
+  sleepLookMoves(false);
+  sleepOnRamp();
   printf(failures ? "brightness: %d failure(s)\n" : "brightness: ok\n", failures);
   return failures != 0;
 }

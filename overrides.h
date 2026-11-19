@@ -118,7 +118,12 @@ void overridesUpdate() {
     }
     strncpy(overridePhase, activePhase, sizeof(overridePhase) - 1);
   }
-  float rate = sleepActive ? max(dimmerRate, dimmerLevel() / sleepLengthMs) : dimmerRate;
+  float rate = dimmerRate;
+  if (sleepActive) {   // at least the ramp's slope, and fast enough to reach 0 by the sleep's end
+    uint32_t elapsed = millis() - sleepStartMs;
+    uint32_t left = elapsed < sleepLengthMs ? sleepLengthMs - elapsed : 1;
+    rate = max(rate, max(dimmerLevel() / sleepLengthMs, dimmer / left));
+  }
   if (sleepActive && millis() - sleepStartMs >= sleepLengthMs) {
     sleepActive = false;
     powerOff = true;
