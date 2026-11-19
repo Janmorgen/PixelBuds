@@ -34,6 +34,26 @@ static bool checkCell(const char* what, int R, int j, const CRGB& led, const int
   return true;
 }
 
+// Writes a pixel with the given rampFrames per write; the cell is overwritten between writes. Checks every write against
+// the contract with start from the first write and R from the first write.
+static bool checkSequence(const char* what, CRGB startCell, CRGB colour, const std::vector<int>& ramps) {
+  const int x = 7, y = 3, at = getIndex(x, y);
+  clearBoard();
+  LEDs[at] = startCell;
+  pixel p = makePixel(colour, x, y);
+  const int R = max(1, ramps[0]);
+  bool ok = true;
+  for (size_t j = 0; j < ramps.size(); j++) {
+    p.writePixel(ramps[j]);
+    int want[3];
+    for (int c = 0; c < 3; c++) want[c] = contract(startCell[c], colour[c], (int)j, R);
+    ok &= checkCell(what, R, (int)j, LEDs[at], want);
+    LEDs[at] = CRGB((j * 13) % 256, 0, 255 - j % 256);
+  }
+  printf("%s: %s\n", what, ok ? "follows the contract" : "MISMATCH");
+  return ok;
+}
+
 int main() {
   simRng.seed(1);
   setup();
@@ -92,7 +112,7 @@ int main() {
   }
 
   // 3b. Sweep: many ramps, starts and targets, every write; +-1 against the contract, and exact for odd ramps
-  // (an odd ramp never lands on .5) against an integer reference that rounds half away from zero.
+  // against an integer reference that rounds half away from zero.
   {
     int cells = 0, off = 0, inexact = 0;
     for (int R = 2; R <= 24; R++) {
@@ -127,6 +147,61 @@ int main() {
     printf("sweep: %d cells, %d off the contract, %d off the exact odd-ramp reference\n", cells, off, inexact);
   }
 
+  // 3c. Start and ramp length are taken at the first write and kept: a cell from an earlier ramp must not leak in.
+  {
+    const int X2 = 20, Y2 = 5, idx2 = getIndex(X2, Y2);
+    auto reset = [&]() { clearBoard(); LEDs[idx] = CRGB(0, 0, 250); };
+    // Stale start: an earlier ramp from a blue cell, then a move to a black cell with later writes at other lengths.
+    reset();
+    pixel p = makePixel(CRGB(200, 0, 0), X, Y);
+    for (int j = 0; j < 25; j++) p.writePixel(21);
+    p.xPos = X2; p.yPos = Y2; p.framesSinceMove = 0;
+    LEDs[idx2] = CRGB();
+    bool ok = true;
+    const int later[] = {13, 1, 40, 5, 13, 21, 2, 13, 13, 13, 13, 13, 13, 13};
+    for (int j = 0; j < 14; j++) {
+      p.writePixel(j == 0 ? 13 : later[j]);
+      int want[3];
+      for (int c = 0; c < 3; c++) want[c] = contract(0, p.color[c], j, 13);
+      ok &= checkCell("stale start", 13, j, LEDs[idx2], want);
+      if (j + 1 < 13) CHECK(LEDs[idx2].b == 0, "stale start, write %d: blue %d leaked in from the earlier ramp", j, LEDs[idx2].b);
+    }
+    printf("stale start, ramp 13: %s\n", ok ? "follows the contract" : "MISMATCH");
+
+    // Ramp length 1 at the first write is kept: later writes at 13 show the colour as is.
+    clearBoard();
+    pixel a = makePixel(CRGB(200, 0, 0), X, Y);
+    ok = true;
+    for (int j = 0; j < 6; j++) {
+      a.writePixel(j == 0 ? 1 : 13);
+      int want[3];
+      for (int c = 0; c < 3; c++) want[c] = contract(0, a.color[c], j, 1);
+      ok &= checkCell("kept length 1", 1, j, LEDs[idx], want);
+    }
+    printf("kept ramp length 1: %s\n", ok ? "follows the contract" : "MISMATCH");
+
+    // Ramp length 21 at the first write is kept: later writes at 1 continue the ramp.
+    clearBoard();
+    pixel b = makePixel(CRGB(200, 100, 40), X, Y);
+    ok = true;
+    for (int j = 0; j < 23; j++) {
+      b.writePixel(j == 0 ? 21 : 1);
+      int want[3];
+      for (int c = 0; c < 3; c++) want[c] = contract(0, b.color[c], j, 21);
+      ok &= checkCell("kept length 21", 21, j, LEDs[idx], want);
+    }
+    printf("kept ramp length 21: %s\n", ok ? "follows the contract" : "MISMATCH");
+  }
+
+  // 3d. Ramp length 13 at the first write, then 93 on later writes; and a whole 93-frame ramp.
+  {
+    std::vector<int> v(30, 93);
+    v[0] = 13;
+    checkSequence("first write 13, later 93", CRGB(30, 30, 30), CRGB(255, 0, 90), v);
+    std::vector<int> w(100, 93);
+    checkSequence("whole ramp of 93", CRGB(250, 0, 0), CRGB(0, 255, 7), w);
+  }
+
   // 4. Through loop(): embers, one isolated pixel, its head cell's brightness after each move.
   {
     pixels.clear();
@@ -145,9 +220,15 @@ int main() {
     p.framesSinceMove = 1000;
     pixels.push_back(p);
     int moves = 0, bad = 0, litRamps = 0;
-    for (int f = 0; f < 1500 && moves < 4; f++) {
-      static CRGB before[RGB_LED_NUM];
+    for (int f = 0; f < 1500 && (moves < 4 || litRamps < 1); f++) {
+      static CRGB before[RGB_LED_NUM], savedLeds[RGB_LED_NUM];
+      static uint16_t savedTrail[RGB_LED_NUM][3];
+      memcpy(savedLeds, LEDs, sizeof(savedLeds));
+      memcpy(savedTrail, trail, sizeof(savedTrail));
+      fadeBoard(activeLook.fade, frameInStep == 0);
       memcpy(before, LEDs, sizeof(before));
+      memcpy(LEDs, savedLeds, sizeof(savedLeds));
+      memcpy(trail, savedTrail, sizeof(savedTrail));
       loop();
       if (pixels.size() != 1) { CHECK(false, "loop: the board has %d pixels, want 1", (int)pixels.size()); break; }
       pixel& q = pixels[0];
@@ -156,7 +237,7 @@ int main() {
       const float moveInterval = max(1.0f, activeLook.moveEvery * FRAMES_PER_STEP);
       const int R = max(1, (int)lroundf(moveInterval) - FRAMES_PER_STEP + 1);
       const int x0 = q.getX(), y0 = q.getY(), idx2 = getIndex(x0, y0);
-      const CRGB startColour = before[idx2];   // the cell on the frame of the move
+      const CRGB startColour = before[idx2];   // the cell after that frame's fade, before the pixel writes
       const int startBright = max(startColour.r, max(startColour.g, startColour.b));
       std::vector<int> trace;
       auto bright = [&]() { return (int)max(LEDs[idx2].r, max(LEDs[idx2].g, LEDs[idx2].b)); };
@@ -179,7 +260,7 @@ int main() {
         upward &= startColour[c] <= t;
       }
       lit = startBright > 2;
-      if (lit && !upward) continue;   // a ramp that falls on some channel has no single even step
+      if (lit && !upward) continue;   // only ramps that rise on every channel are checked
       if (lit) litRamps++;
       moves++;
       const int even = (target - startBright + R - 1) / R;
@@ -195,13 +276,54 @@ int main() {
       bool ok = true;
       if (drops) { CHECK(false, "move %d: brightness dropped %d times during the ramp", moves, drops); ok = false; }
       if (worstStep > even) { CHECK(false, "move %d: a frame stepped %d, the even step is %d", moves, worstStep, even); ok = false; }
-      if (!lit && leastStep < (target - startBright) / R) { CHECK(false, "move %d: a frame stepped only %d, the even step is %d", moves, leastStep, even); ok = false; }
+      const int lowStep = (target - startBright) / R;
+      if (leastStep < lowStep) { CHECK(false, "move %d: a frame stepped only %d, the lower bound is %d", moves, leastStep, lowStep); ok = false; }
       if (abs(trace.back() - target) > 1) { CHECK(false, "move %d: ended at %d, want %d", moves, trace.back(), target); ok = false; }
       bad += !ok;
     }
     CHECK(moves >= 2, "loop: only %d clean ramps seen", moves);
     CHECK(litRamps >= 1, "loop: no ramp from a lit cell was checked");
     printf("loop, embers: %d ramps checked (%d from a lit cell), %d bad\n", moves, litRamps, bad);
+  }
+
+  // 5. Through loop(): day, then embers through a /test hold switch. Heads that stayed put must not drop by over half.
+  {
+    simRng.seed(7);
+    pixels.clear();
+    initAvailableIndicies();
+    effectsClear();
+    clearBoard();
+    for (int c = 0; c < PALETTE_SIZE; c++) colourOverride[c] = 0;
+    adjustPixels = 100;
+    for (int i = 0; i < 30; i++) { pixel np; np.randomize(); pixels.push_back(np); }
+    auto brightest = [](const CRGB& c) { return (int)max(c.r, max(c.g, c.b)); };
+    auto watch = [&](int frames) {
+      int dips = 0, checked = 0;
+      for (int f = 0; f < frames; f++) {
+        std::vector<int> ox(pixels.size()), oy(pixels.size()), ob(pixels.size());
+        for (size_t i = 0; i < pixels.size(); i++) { ox[i] = pixels[i].getX(); oy[i] = pixels[i].getY(); ob[i] = brightest(LEDs[getIndex(ox[i], oy[i])]); }
+        const size_t n = pixels.size();
+        loop();
+        if (pixels.size() != n) continue;
+        for (size_t i = 0; i < n; i++) {
+          if (pixels[i].getX() != ox[i] || pixels[i].getY() != oy[i]) continue;
+          const CRGB& c = pixels[i].color;
+          if (!(c.r >= 5 || c.g >= 5 || c.b >= 5)) continue;
+          checked++;
+          if (ob[i] >= 40 && brightest(LEDs[getIndex(ox[i], oy[i])]) * 2 < ob[i]) dips++;
+        }
+      }
+      return std::make_pair(checked, dips);
+    };
+    startTestHold(-1, 3, 0);
+    for (int f = 0; f < 800; f++) loop();
+    startTestHold(-1, 0, 0);
+    for (int f = 0; f < 800; f++) loop();
+    startTestHold(-1, 3, 0);
+    const auto r = watch(40);
+    CHECK(r.first > 0, "look jump: no head-frames were checked");
+    CHECK(r.second == 0, "look jump, day to embers: %d head-frames halved from the frame before", r.second);
+    printf("look jump, day to embers: %d head-frames checked, %d halved\n", r.first, r.second);
   }
 
   if (failures) { printf("FAILED: %d\n", failures); return 1; }
