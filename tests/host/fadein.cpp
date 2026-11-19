@@ -1,7 +1,7 @@
 // Fade-in after a move or spawn, against the writePixel contract. Sections: 1-3b unit tests of one pixel (black start, kept start
 // with the cell overwritten between writes, presence changes, a sweep of ramps/starts/targets); 3c and 3d kept start and kept
-// ramp length; 4 a loop() check on an embers board with one pixel; 5 thirty pixels through an evening-to-embers look jump at twelve
-// seeds and switch offsets, requiring ramps that cross the switch and no halved heads.
+// ramp length; 4 a loop() check on an embers board with one pixel; 5 an evening board (30 pixels spawned) through a jump to
+// embers at twelve seeds and switch offsets, requiring heads the dip check can see and no halved heads.
 #include "common.h"
 #include <ArxContainer.h>
 #include "PixelBuds.ino"
@@ -10,11 +10,6 @@ static int contract(int start, int shown, int j, int R) {
   if (R <= 1 || j + 1 >= R) return shown;
   return (int)lroundf(start + (shown - start) * (float)(j + 1) / R);
 }
-
-// The pixel's held ramp length; 1 on a sketch that does not keep one.
-template <class P> static auto rampLenOf(P& p, int) -> decltype((int)p.rampLen) { return (int)p.rampLen; }
-template <class P> static int rampLenOf(P&, long) { return 1; }
-template <class P> static int rampLenOf(P& p) { return rampLenOf(p, 0); }
 
 static pixel makePixel(CRGB colour, int x, int y) {
   pixel p;
@@ -293,14 +288,27 @@ int main() {
     printf("loop, embers: %d ramps checked (%d from a lit cell), %d bad\n", moves, litRamps, bad);
   }
 
-  // 5. Through loop(): 30 pixels, evening look then embers through a /test hold switch, at 12 consecutive seeds and switch offsets 5 frames apart.
-  // Heads that stayed put (same colour and presence) must not drop by over half from the frame before; and enough heads
-  // must have a ramp running across the switch, so the check cannot pass with nothing to see.
+  // 5. Through loop(): an evening board (30 pixels spawned), then embers through a /test hold switch, at 12 consecutive
+  // seeds and switch offsets 5 frames apart. Heads that stayed put (same colour and presence) must not drop by over half
+  // from the frame before. `detectable` counts checked heads that would show under half their previous brightness at the
+  // switch were the new ramp length re-read mid-ramp; at least one is required.
   {
     const char* seedEnv = getenv("FADEIN_SEED");
     const int seed0 = seedEnv ? atoi(seedEnv) : 7;
-    int checked = 0, dips = 0, spanning = 0;
+    int checked = 0, dips = 0, detectable = 0;
     auto brightest = [](const CRGB& c) { return (int)max(c.r, max(c.g, c.b)); };
+    auto rampOf = [](const Look& l) { return max(1, (int)lroundf(l.moveEvery * FRAMES_PER_STEP) - FRAMES_PER_STEP + 1); };
+    const int rOld = rampOf(LOOK_EVENING), rNew = rampOf(LOOK_EMBERS);
+    // Brightest channel the j-th write would show if the ramp length were re-read as rNew.
+    auto rereadBright = [&](const pixel& p, int j) {
+      if (j + 1 >= rNew) return 0;
+      int best = 0;
+      for (int c = 0; c < 3; c++) {
+        int shown = (uint8_t)(p.color[c] * p.shownPresence), start = p.rampStart[c];
+        best = max(best, (int)lroundf(start + (shown - start) * (float)(j + 1) / rNew));
+      }
+      return best;
+    };
     for (int k = 0; k < 12; k++) {
       simRng.seed(seed0 + k);
       pixels.clear();
@@ -330,18 +338,19 @@ int main() {
           pixel& p = pixels[i];
           if (p.getX() != ox[i] || p.getY() != oy[i]) continue;
           const int now = brightest(LEDs[getIndex(ox[i], oy[i])]);
-          if (f == 0 && ofs[i] >= 1 && ofs[i] + 1 < rampLenOf(p)) spanning++;
           if (p.color.r != oc[i].r || p.color.g != oc[i].g || p.color.b != oc[i].b || p.shownPresence != op[i]) continue;
           if (!(p.color.r >= 5 || p.color.g >= 5 || p.color.b >= 5)) continue;
           checked++;
+          if (f == 0 && ob[i] >= 40 && ofs[i] >= 1 && ofs[i] + 1 < rNew && rereadBright(p, ofs[i]) * 2 < ob[i]) detectable++;
           if (ob[i] >= 40 && now * 2 < ob[i]) dips++;
         }
       }
     }
     CHECK(checked > 0, "look jump: no head-frames were checked");
-    CHECK(spanning >= 3, "look jump: only %d heads had a ramp running across the switch, want at least 3", spanning);
+    CHECK(detectable >= 1, "look jump: no checked head would halve were the ramp length re-read");
     CHECK(dips == 0, "look jump, evening to embers: %d head-frames halved from the frame before", dips);
-    printf("look jump, evening to embers: %d head-frames checked, %d ramps across the switch, %d halved\n", checked, spanning, dips);
+    printf("look jump, evening to embers (ramp %d to %d): %d head-frames checked, %d heads a re-read would halve, %d halved\n",
+           rOld, rNew, checked, detectable, dips);
   }
 
   if (failures) { printf("FAILED: %d\n", failures); return 1; }
