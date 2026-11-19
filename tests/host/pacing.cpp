@@ -1,6 +1,19 @@
-// Frame pacing against the virtual clock: frameBegin()/frameEnd() hold a fixed grid and recover from overruns.
+// Frame pacing against the virtual clock: frameBegin()/frameEnd() hold a fixed grid and recover from overruns,
+// and loop()'s show() calls stay far enough apart for each LED transfer to finish.
 #include "common.h"
+#include <ArxContainer.h>
+#include "network.h"
 #include "frameclock.h"
+static uint32_t preShowWorkUs = 0;   // work time loop() spends just before show(), injected below
+#define dayCycleReportPixels(n) (simMicros += preShowWorkUs, dayCycleReportPixels(n))
+#include "PixelBuds.ino"
+#undef dayCycleReportPixels
+#ifndef SHOW_GAP_US
+#define SHOW_GAP_US 9000   // a 256-LED transfer (about 7.96 ms) plus margin
+#endif
+
+static std::vector<uint32_t> showTimes;
+static void recordShow() { showTimes.push_back(micros()); }
 
 static const uint32_t F = FRAME_US;
 
@@ -51,15 +64,46 @@ int main() {
   for (size_t k = 12; k < c.size(); k++) CHECK(c[k] == c[11] + (k - 11) * F, "overrun 50 ms: frame %zu is off the restarted grid", k);
   printf("overrun 50 ms: late %u, grid restarted from the overrun frame\n", frameStats.late);
 
-  // The reported rate settles on the target after a few seconds (the first window reads high).
+  // The reported rate reads the target from the first one-second window on.
   reset();
   std::vector<float> fps;
+  float firstFps = 0;
   for (int k = 0; k < 400; k++) {
     frameBegin(); simMicros += 3000; frameEnd();
+    if (firstFps == 0) firstFps = frameStats.fps;
     if (k % 54 == 53) fps.push_back(frameStats.fps);
   }
-  printf("fps readings:"); for (float f : fps) printf(" %.2f", f); printf("\n");
+  printf("fps readings:"); for (float f : fps) printf(" %.2f", f); printf("  first %.2f\n", firstFps);
+  CHECK(fabs(firstFps - 53.3f) <= 0.1f, "first fps reading %.3f, want 53.3 +-0.1", firstFps);
   CHECK(fabs(frameStats.fps - 53.3f) <= 0.1f, "settled fps %.3f, want 53.3 +-0.1", frameStats.fps);
+
+  // loop() with one frame's work overrunning its slot by 1 to 30 ms at a time: show() calls never come closer
+  // together than SHOW_GAP_US.
+  reset();
+  setup();
+  startTestHold(-1, 0, 0);
+  showHook = recordShow;
+  int overruns = 0;
+  for (uint32_t over = 1000; over <= 30000; over += 1000) {
+    for (int k = 0; k < 12; k++) {
+      preShowWorkUs = k == 8 ? F + over : 2000;
+      loop();
+    }
+    overruns++;
+  }
+  showHook = nullptr;
+  uint32_t minGap = UINT32_MAX;
+  int tooClose = 0;
+  for (size_t k = 1; k < showTimes.size(); k++) {
+    uint32_t gap = showTimes[k] - showTimes[k - 1];
+    minGap = std::min(minGap, gap);
+    if (gap < SHOW_GAP_US) tooClose++;
+  }
+  printf("show gaps over %d overruns of 1-30 ms: shortest %u us, %d below %u us\n", overruns, minGap, tooClose,
+         (unsigned)SHOW_GAP_US);
+  CHECK(tooClose == 0, "%d show() calls came less than %u us after the previous one (shortest %u us)", tooClose,
+        (unsigned)SHOW_GAP_US, minGap);
+  CHECK(SHOW_GAP_US >= 8000, "SHOW_GAP_US %u is shorter than a 256-LED transfer", (unsigned)SHOW_GAP_US);
 
   printf(failures ? "pacing: %d failure(s)\n" : "pacing: ok\n", failures);
   return failures != 0;

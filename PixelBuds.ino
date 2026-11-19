@@ -455,7 +455,7 @@ void setup() {
     newPixel.randomize();
     pixels.push_back(newPixel);
   }
-  FastLED.show();
+  frameShow();
 }
 
 int frameInStep = 0;                            // 0 on the frames that run a simulation step
@@ -594,6 +594,6 @@ void loop() {
   if (step && !paused) trackIslands();
   dayCycleReportPixels(pixels.size());
   frameInStep = (frameInStep + 1) % FRAMES_PER_STEP;
-  FastLED.show();
+  frameShow();
   frameEnd();
 }
