@@ -52,7 +52,7 @@ void simOnShow() {
   uint32_t r = 0, g = 0, b = 0;
   for (int i = 0; i < RGB_LED_NUM; i++) { r += LEDs[i].r; g += LEDs[i].g; b += LEDs[i].b; }
   uint32_t total = ((r * 80) + (g * 55) + (b * 75)) / 256 + RGB_LED_NUM * 5;
-  double pw = (double)total * FastLED.brightness / 256 + 125;
+  double pw = (double)(total + 125) * FastLED.brightness / 256;
   sumPow += pw;
   powN++;
   peakPow = max(peakPow, pw);

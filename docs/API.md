@@ -1,6 +1,6 @@
 # PixelBuds HTTP API
 
-The developer reference for every HTTP route the PixelBuds firmware serves (the `effects` branch), for writing a remote control such as a phone app, web page or home automation. This file is the source of truth for the API: [Route index](#route-index) lists every route with its options, and [Endpoint reference](#endpoint-reference) describes each one. The firmware's own `/help` route gives a short version of the same list.
+The developer reference for every HTTP route the PixelBuds firmware serves, for writing a remote control such as a phone app, web page or home automation. This file is the source of truth for the API: [Route index](#route-index) lists every route with its options, and [Endpoint reference](#endpoint-reference) describes each one. The firmware's own `/help` route gives a short version of the same list.
 
 ## Contents
 - [Route index](#route-index)
@@ -29,7 +29,7 @@ Every route the firmware registers. Options go in the query string; a route list
 | [`/help`](#status) | none | A plain-text route list |
 | [`/power/off`](#poweroff) | `fade` 0–600 s · `until` `phase`\|`morning` | Turns the light off |
 | [`/power/on`](#poweron) | `fade` 0–600 s | Turns the light on; cancels a sleep timer |
-| [`/brightness`](#brightness) | `scale` 0–100 | Percent of the look's brightness |
+| [`/brightness`](#brightness) | `scale` 0–400 | Percent of the look's brightness |
 | [`/sleep`](#sleep) | `in` 1–240 min, required | Dims to off over `in` minutes, then off until wake |
 | [`/adjust`](#adjust) | `speed`, `trail`, `mix` 25–400 · `pixels` 25–200 | Percent changes to the current look |
 | [`/colors`](#colors) | `red`, `green`, `blue`, `amber` 0–100 or `auto` | How often each colour spawns |
@@ -87,7 +87,7 @@ Success (`200`):
 Failure (`400`, `404`, `409`):
 
 ```json
-{ "ok": false, "error": "?scale= takes a percentage, 0 to 100." }
+{ "ok": false, "error": "?scale= takes a percentage, 0 to 400." }
 ```
 
 | Field | Type | Meaning |
@@ -116,7 +116,7 @@ The light has three layers. A remote control should present them separately.
 - During a hold (`/test?hold=`) the phase never changes, so overrides last until the hold ends.
 - Changing `/schedule` can move the current time into a different phase, which clears overrides.
 
-**Brightness shown** = `look.brightness` × `power.dimmer`. The dimmer combines power, the brightness override and the sleep ramp, and glides to new values: about 1 s for brightness changes, 3 s when overrides clear, and the requested fade for power.
+**Brightness shown** = `look.brightness` × `power.dimmer`, at most 255. The dimmer combines power, the brightness override and the sleep ramp, and glides to new values: about 1 s for brightness changes, 3 s when overrides clear, and the requested fade for power. It never goes above the point where the look reaches 255, so a fade, sleep or glide from a high setting starts dimming at once instead of holding at 255 first; only the power cap (see [`/brightness`](#brightness)) can still hold a bright frame level for the start of a fade.
 
 ## The status object
 
@@ -188,8 +188,8 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
 | `power.on` | bool | `false` while powered off (including after a sleep timer finishes) |
 | `power.untilMorning` | bool | The power-off lasts until wake rather than the next phase |
 | `power.sleepSecondsLeft` | int \| null | Seconds until a running sleep timer reaches off |
-| `power.dimmer` | number 0–1 | The share of the look's brightness being shown right now. It glides, so a command's reply shows where the glide starts; `overrides.brightness` and `power.on` show the target |
-| `overrides.brightness` | int 0–100 | Brightness override, percent |
+| `power.dimmer` | number 0–4, at most 255 ÷ `look.brightness` | The multiplier on the look's brightness right now; above 1 is brighter than the look. It stops at the headroom where the look reaches 255, so on `day` (brightness 100) it is at most 2.55 even at 400 %. It glides, so a command's reply shows where the glide starts; `overrides.brightness` shows the requested percent (such as 400) and `power.on` the target |
+| `overrides.brightness` | int 0–400 | Brightness override, percent; 100 means no change |
 | `overrides.speed`, `.pixels`, `.trail`, `.mix` | int | `/adjust` percentages; 100 means no change |
 | `overrides.colors.<colour>` | int 0–100 \| null | Colour override; `null` means the schedule decides |
 | `overrides.paused` | bool | Motion is frozen |
@@ -243,16 +243,16 @@ Turns the light on and cancels power-off (including `until=morning`) and any sle
 #### `/brightness`
 | Option | Values | Default |
 |---|---|---|
-| `scale` | percent, 0–100 | none: with no option, returns the current override status |
+| `scale` | percent, 0–400 | none: with no option, returns the current override status |
 
-Percent of the current look's brightness; it cannot exceed the schedule.
+Percent of the current look's brightness. Above 100 makes the light brighter than the look, up to the matrix's maximum of 255. The firmware also caps the matrix at 5 V, 500 mA, and FastLED dims the whole frame to stay under it. At high settings the day and golden looks show less than asked. Evening at 400 % is briefly held under the cap even with effects off, and more often with effects that add light (such as ripple). Embers stays under the cap at 400 %.
 
 #### `/sleep`
 | Option | Values | Default |
 |---|---|---|
 | `in` | minutes, 1–240 | required |
 
-Dims smoothly to off over `in` minutes, then stays off until wake. A phase change while sleeping does not cancel it or reset the brightness override. Cancel with `/power/on` or `/reset`.
+Dims smoothly to off over `in` minutes, then stays off until wake. Sent while the light is off, it turns it back on (about 1 s) and dims from there. A phase change while sleeping does not cancel it or reset the brightness override. Cancel with `/power/on` or `/reset`.
 
 #### `/adjust`
 Percent changes to the current look; 100 means no change. With no options, returns the current status.
@@ -372,7 +372,7 @@ Branch on the HTTP status code (or `ok`), not on the error text.
 ## Recommended client pattern
 
 1. On launch, `GET /status.json`. If it fails, show the board as offline.
-2. Poll `/status.json` every 2–5 s while the remote is on screen. Every second at most: requests compete with the animation.
+2. Poll `/status.json` every 2–5 s while the remote is on screen, and at most once a second. Each request is handled inside an LED frame.
 3. After any command, check for `200` and render from the reply's `status`. On an error, show `error` and keep the previous state.
 4. Watch `uptimeSeconds`: if it drops, the board rebooted and every override is gone.
 5. Show when overrides end, from `overrides.until` (or "until wake" when `power.untilMorning` is true).
@@ -394,3 +394,4 @@ These limit what a client can do today.
 - **No CORS headers.** A web page served from another origin can't read responses (native apps and `curl` are unaffected). Adding `Access-Control-Allow-Origin: *` to every response would fix it.
 - **No discovery.** The board has no stable name on the network; reserve its IP.
 - **State-changing GETs.** Link previews or browser prefetching of a command URL will run it.
+- **A slow request freezes the light.** Requests are read inside the animation loop, and the server waits up to 5 s for each byte of a request that arrives slowly, so a client that trickles data can hold it much longer. Send each request in one go.

@@ -40,7 +40,7 @@ Temporary changes. They end when the phase changes (the status shows when), or a
 |---|---|
 | `/power/off?fade=SEC&until=morning` | Turns the light off, fading over 0–600 s (default 1). `until=morning` keeps it off until the wake phase |
 | `/power/on?fade=SEC` | Turns it back on; also cancels a sleep timer |
-| `/brightness?scale=0-100` | Dims the current look |
+| `/brightness?scale=0-400` | Dims or brightens the current look (up to 255; the 500 mA power cap can hold back bright looks, see docs/API.md) |
 | `/sleep?in=MIN` | Dims to off over 1–240 minutes, then stays off until wake |
 | `/adjust?speed=&pixels=&trail=&mix=` | Percent of the current look: 25–400, pixels 25–200 |
 | `/colors?red=&green=&blue=&amber=` | How often each colour spawns, 0–100, or `auto` for the schedule's |
