@@ -86,7 +86,7 @@ void resetOverrides() {
   clearPhaseOverrides();
 }
 
-// Trail fade per frame that makes trails last `pct` percent as long as with `fade`.
+// Trail fade per step that makes trails last `pct` percent as long as with `fade`.
 static float scaleTrail(float fade, int pct) {
   if (fade <= 0.0f || pct == 100) return fade;
   return 256.0f * (1.0f - powf(1.0f - fade / 256.0f, 100.0f / pct));

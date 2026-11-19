@@ -31,10 +31,9 @@ int getIndex(int x, int y) {
   return 8 * x + y + yDiff;
 }
 
-static uint16_t trail[RGB_LED_NUM][3];   // the LEDs in 8.8 fixed point, so the per-frame fade keeps its fractions
+static uint16_t trail[RGB_LED_NUM][3];   // the LEDs in 8.8 fixed point
 
-// Fades the board by `perStep` (0-255, as fadeToBlackBy) per simulation step, spread evenly over the step's
-// frames. On step frames the fractions are dropped, so a step's fade ends where fadeToBlackBy would.
+// Fades the board by `perStep` (0-255, as fadeToBlackBy) per simulation step, spread evenly over the step's frames.
 void fadeBoard(float perStep, bool stepFrame) {
   uint32_t keep = (uint32_t)(powf(1.0f - perStep / 256.0f, 1.0f / FRAMES_PER_STEP) * 65536.0f);
   for (int i = 0; i < RGB_LED_NUM; i++) {
@@ -450,6 +449,7 @@ void setup() {
 #endif
   initAvailableIndicies();
   effectsClear();
+  pixels.reserve(PIXELS_RESERVED);
   for (int a = 0; a < 30; a++) {
     pixel newPixel = pixel();
     newPixel.randomize();
@@ -467,7 +467,8 @@ uint32_t moveTicks = 0, mixTicks = 0;
 bool tickClock(float& clock, float interval) {
   clock += 1.0f;
   if (clock < interval - 0.001f) return false;
-  clock = min(clock - interval, interval);
+  clock -= interval;
+  if (clock >= 1.0f) clock = 0;
   return true;
 }
 static int lastSegment = -2;

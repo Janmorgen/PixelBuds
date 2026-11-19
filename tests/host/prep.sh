@@ -16,7 +16,7 @@ else
 fi
 rm -f "$out/sketch/secrets.h" "$out/sketch/webapi.h"
 cp "$here/stubs/network_stub.h" "$out/sketch/network.h"
-# Placeholder secrets: the real file is gitignored and the host build needs none of its values.
+# Placeholder secrets.
 cat > "$out/sketch/secrets.h" <<'EOF'
 #pragma once
 #define WIFI_SSID "host-test"

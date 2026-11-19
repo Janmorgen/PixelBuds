@@ -13,7 +13,7 @@ void simIslandEnd(const Island&);
 
 static int warmup = 500, frames = 0, previewFrames = 0;
 static long shown = 0, stepsShown = 0, powN = 0, previewed = 0;
-static bool looping = false;   // set once setup() is done, so its show() is not counted as a step
+static bool looping = false;   // set once setup() is done
 static uint64_t ledHash = 1469598103934665603ULL;
 static double sumLit = 0, sumSat = 0, sumVal = 0, sumPow = 0, peakPow = 0, sumIslands = 0, sumIslandSize = 0;
 static long satN = 0, islandFrames = 0, overCap = 0;

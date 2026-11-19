@@ -204,8 +204,8 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
 | `effects.islandsNow` | int | Islands (two or more touching lit pixels) on the matrix right now |
 | `frames.fps` | number | LED frames per second over the last full second |
 | `frames.targetFps` | number | The frame rate aimed for: 4 frames per 75 ms step, about 53.3 |
-| `frames.workAvgMs`, `frames.workMaxMs` | number | Average and worst work per frame over the last full second, including network handling and `show()`. A frame has 18.75 ms |
-| `frames.late` | int | Frames since boot whose work overran their 18.75 ms slot |
+| `frames.workAvgMs`, `frames.workMaxMs` | number | Average and worst time per frame, from the start of the frame's work to its end, over the last full second. It includes network handling, the wait in `frameShow()` for 9 ms to pass since the previous `show()` started, and `show()`. A frame has 18.75 ms |
+| `frames.late` | int | Frames since boot that started on time and whose work ran past their 18.75 ms slot. A frame that starts late because the one before overran is not counted again |
 | `uptimeSeconds` | int | Seconds since boot. A drop means the board rebooted, which cleared all overrides |
 | `build` | string | Firmware compile time. Changes after a wireless update |
 

@@ -1,8 +1,6 @@
 // Speed and mix ladders: the move and mix rates per simulated second must follow /adjust?speed= and ?mix=.
-// The rates are the frames per simulated second that run a move or a mix (moveTicks, mixTicks). The old
-// one-step-per-frame sketch has no such counters; prep.sh adds them to its copy, so this file builds against both.
-// Behaviour cross-checks: one-cell pixel moves (apart from respawns that land next door, hence the small allowance)
-// and reads of ruleMix happen only on tick frames.
+// The rates are the frames per simulated second that run a move or a mix (moveTicks, mixTicks).
+// Also checks that one-cell pixel moves and reads of ruleMix happen only on tick frames.
 #include "common.h"
 #include <unistd.h>
 #include <sys/wait.h>

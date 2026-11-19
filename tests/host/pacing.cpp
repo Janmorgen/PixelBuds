@@ -9,7 +9,7 @@ static uint32_t preShowWorkUs = 0;   // work time loop() spends just before show
 #include "PixelBuds.ino"
 #undef dayCycleReportPixels
 #ifndef SHOW_GAP_US
-#define SHOW_GAP_US 9000   // a 256-LED transfer (about 7.96 ms) plus margin
+#define SHOW_GAP_US 9000
 #endif
 
 static std::vector<uint32_t> showTimes;
@@ -20,6 +20,7 @@ static const uint32_t F = FRAME_US;
 static void reset() {
   simMicros = 1000000;
   frameStartUs = frameDeadlineUs = statWindowUs = 0;
+  frameClockStarted = false;
   statFrames = statWorkSumUs = statWorkMaxUs = 0;
   frameStats = {0, 0, 0, 0};
 }
@@ -76,6 +77,33 @@ int main() {
   printf("fps readings:"); for (float f : fps) printf(" %.2f", f); printf("  first %.2f\n", firstFps);
   CHECK(fabs(firstFps - 53.3f) <= 0.1f, "first fps reading %.3f, want 53.3 +-0.1", firstFps);
   CHECK(fabs(frameStats.fps - 53.3f) <= 0.1f, "settled fps %.3f, want 53.3 +-0.1", frameStats.fps);
+
+  // One overrun of 20-37 ms counts as one late frame.
+  for (uint32_t over = 20000; over <= 37000; over += 500) {
+    reset();
+    for (int k = 0; k < 40; k++) {
+      frameBegin();
+      simMicros += k == 10 ? over : k == 11 ? 9000 : 5000;
+      frameEnd();
+    }
+    CHECK(frameStats.late == 1, "overrun %u us: late = %u, want 1", over, frameStats.late);
+  }
+  printf("single overruns of 20-37 ms each count as 1 late frame\n");
+
+  // A deadline that lands on micros() == 0 does not restart the stats window.
+  reset();
+  simMicros = (1ULL << 32) - 10 * (uint64_t)F;
+  frameBegin();
+  const uint32_t window = statWindowUs;
+  frameEnd();
+  for (int k = 1; k <= 10; k++) {
+    frameBegin();
+    if (k == 10) CHECK(frameDeadlineUs == 0, "the deadline is %u at frame 10, want 0", frameDeadlineUs);
+    simMicros += 3000;
+    frameEnd();
+  }
+  CHECK(statWindowUs == window, "stats window moved from %u to %u when the deadline reached 0", window, statWindowUs);
+  printf("deadline of exactly 0: stats window kept\n");
 
   // loop() with one frame's work overrunning its slot by 1 to 30 ms at a time: show() calls never come closer
   // together than SHOW_GAP_US.

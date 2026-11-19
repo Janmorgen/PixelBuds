@@ -15,6 +15,7 @@
 #define RIPPLE_MAX    12.0f  // largest ring radius, cells
 #define RIPPLE_MIN_PEAK   3  // only islands that reached this many pixels ripple
 #define RIPPLE_MIN_FRAMES 24 // and lasted this many steps (about 2 s)
+#define PIXELS_RESERVED   256 // most pixels there can be: one per cell
 #define ISLANDS_RESERVED  256 // room kept for islands: last step's and this step's, two or more cells each
 #define SEEDS_RESERVED    256 // room kept for waiting seeds
 
@@ -219,7 +220,19 @@ void trackIslands() {
   }
 
   int grid[32][8];
+  struct Span { int start, size; };
   static std::vector<bool> member, visited;
+  static std::vector<int> members, present;   // present: last step's islands with a member in some group now
+  static std::vector<Span> spans;
+  static bool reserved = false;
+  if (!reserved) {
+    reserved = true;
+    member.reserve(PIXELS_RESERVED);
+    visited.reserve(PIXELS_RESERVED);
+    members.reserve(PIXELS_RESERVED);
+    spans.reserve(PIXELS_RESERVED);
+    present.reserve(PIXELS_RESERVED);
+  }
   member.assign(pixels.size(), false);
   visited.assign(pixels.size(), false);
   for (int x = 0; x < 32; x++) for (int y = 0; y < 8; y++) grid[x][y] = -1;
@@ -231,9 +244,6 @@ void trackIslands() {
   }
 
   // Connected groups of two or more, largest first; group g is members[spans[g].start ..+ spans[g].size].
-  struct Span { int start, size; };
-  static std::vector<int> members;
-  static std::vector<Span> spans;
   members.clear();
   spans.clear();
   for (size_t i = 0; i < pixels.size(); i++) {
@@ -258,7 +268,6 @@ void trackIslands() {
   std::sort(spans.begin(), spans.end(), [](const Span& a, const Span& b) { return a.size > b.size; });
 
   for (Island& is : islands) is.seen = false;
-  static std::vector<int> present;   // last step's islands with a member in some group now
   present.clear();
   for (const Span& span : spans) {
     const int* group = &members[span.start];
@@ -312,7 +321,7 @@ void trackIslands() {
   islandsNow = spans.size();
 }
 
-// Forgets every island, ring and seed, as after a rescatter, keeping room for them so the run does not allocate.
+// Forgets every island, ring and seed, as after a rescatter, keeping room for them.
 void effectsClear() {
   islands.clear();
   ripples.clear();

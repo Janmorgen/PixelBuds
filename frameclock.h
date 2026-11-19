@@ -13,9 +13,9 @@
 // Frame timing over the last full second.
 struct FrameStats {
   float fps;
-  float workAvgMs;   // loop work per frame, network handling and show() included
+  float workAvgMs;   // loop work per frame, network handling, show() and its gap wait included
   float workMaxMs;
-  uint32_t late;     // frames since boot whose work overran their slot
+  uint32_t late;     // frames since boot that started on time and overran their slot
 };
 static FrameStats frameStats = {0, 0, 0, 0};
 
@@ -23,12 +23,16 @@ static uint32_t frameStartUs = 0, frameDeadlineUs = 0;
 static uint32_t statWindowUs = 0, statFrames = 0, statWorkSumUs = 0, statWorkMaxUs = 0;
 static uint32_t lastShowUs = 0;     // when the last show() started
 static bool showStarted = false;    // whether lastShowUs is set
+static bool frameClockStarted = false;   // whether the first frame has set the deadline and stats window
 
 // Marks the start of a frame's work; closes the stats window once a second has passed since it opened, counting
 // frames start to start.
 void frameBegin() {
   frameStartUs = micros();
-  if (!frameDeadlineUs) frameDeadlineUs = statWindowUs = frameStartUs;
+  if (!frameClockStarted) {
+    frameClockStarted = true;
+    frameDeadlineUs = statWindowUs = frameStartUs;
+  }
   if (statFrames && frameStartUs - statWindowUs >= 1000000UL) {
     frameStats.fps = statFrames * 1e6f / (frameStartUs - statWindowUs);
     frameStats.workAvgMs = statWorkSumUs / 1000.0f / statFrames;
@@ -61,9 +65,10 @@ void frameEnd() {
   if (work > statWorkMaxUs) statWorkMaxUs = work;
 
   frameDeadlineUs += FRAME_US;
+  bool startedOnTime = (int32_t)(frameStartUs - (frameDeadlineUs - FRAME_US)) <= 0;
   int32_t left = (int32_t)(frameDeadlineUs - micros());
   if (left < 0) {
-    frameStats.late++;
+    if (startedOnTime) frameStats.late++;
     if (left < -(int32_t)FRAME_US) frameDeadlineUs = micros();
     return;
   }

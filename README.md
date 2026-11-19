@@ -29,7 +29,7 @@ Every route answers GET at `http://<board IP>/` and checks all its options befor
 ### Status
 | Route | Does |
 |---|---|
-| `/` or `/status` | Clock, phase, sun times, current look, schedule, settings and overrides |
+| `/` or `/status` | Clock, phase, sun times, current look, schedule, settings, overrides and the frame rate and timing (`frames`) |
 | `/status.json` | The same as JSON |
 | `/help` | Every route and option |
 

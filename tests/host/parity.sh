@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Checks that the sketch at HEAD simulates the same as the sketch at <base-ref> at 100 % speed: for every look 0-3,
 # seed 1-3 and effect config (none, all) the lit, sat, val, islands, islandsize and created figures of the S line and
-# the island-end log (E lines) must be exactly equal after 5000 steps. hash and power legitimately differ. Not part
-# of run.sh.
+# the island-end log (E lines) must be exactly equal after 5000 steps. Not part of run.sh.
 # Usage: parity.sh <base-ref>
 set -euo pipefail
 [ $# -eq 1 ] || { echo "usage: $0 <base-ref>" >&2; exit 2; }
