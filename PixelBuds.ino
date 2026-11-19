@@ -410,7 +410,10 @@ void pixel::computeCycle(std::vector<pixel*> & neighbors) {
     this->color = CRGB(0, 0, 0);
   }
 }
-// Writes the pixel's colour at its current intensity, fading it in over rampFrames frames after a move or spawn.
+// Writes the pixel's colour at its current intensity. For rampFrames frames after a move or spawn it fades in evenly:
+// on the j-th write since then (j from 0) the cell shows start + (shown - start) * (j + 1) / rampFrames per channel, where
+// start is the cell's colour on the frame of the move, before this pixel wrote to it; from j + 1 >= rampFrames it shows
+// the colour as is.
 void pixel::writePixel(int rampFrames) {
   CRGB& led = LEDs[getIndex(this->xPos, this->yPos)];
   CRGB shown = this->color;
