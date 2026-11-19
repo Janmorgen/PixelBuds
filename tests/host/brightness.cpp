@@ -282,9 +282,9 @@ static void sleepUnderHeadroom() {
 static float rampShown() { return activeLook.brightness * dimmerTarget(); }
 
 // A 1 minute sleep at 400 % held within golden hour; at 18 s the hold moves within the same phase. `brightens` moves
-// it from near golden (look 70) to near day (look 100), so the headroom falls below the dimmer's ramp; otherwise the
-// opposite. The shown brightness is 0 within 1 s of the end; when the look brightens it never falls below the ramp,
-// and when the look dims it never rises above it.
+// it from near golden (look 70) to near day (look 100); otherwise the opposite. `wrap` starts the sleep 10 s before
+// millis() wraps. Checks: shown is 0 on the last frame and stays 0; when the look brightens it never falls below the
+// ramp; when it dims it never rises above the ramp and is below it for at most 335 frames.
 static void sleepLookMoves(bool brightens, bool wrap = false) {
   int falls = 0;
   float dayEnd = schedule[3].minute + 0.01f, goldenEnd = schedule[4].minute - 0.01f;
@@ -312,15 +312,16 @@ static void sleepLookMoves(bool brightens, bool wrap = false) {
   const char* what = brightens ? "brightens" : "dims";
   printf("sleep 1 min at 400%%, look %.0f -> %.0f at 18 s (%s): shown %d at the end, 0 after %d ms more, %d frames above "
          "the ramp, %d below\n", before, activeLook.brightness, activePhase, atEnd, t.reached, above, below);
-  CHECK(atEnd <= 1, "sleep at 400%%, look %s mid-sleep%s: shown %d on the last frame, want 0", what, wrap ? " across the millis wrap" : "", atEnd);
-  if (!brightens && !wrap) CHECK(below <= 335, "sleep at 400%%, look dims mid-sleep: %d frames below the ramp, want at most 335", below);
-  CHECK(t.reached >= 0 && t.reached <= 1000, "sleep at 400%%, look %s mid-sleep: shown %d at the end, reached 0 %d ms later, "
-        "want within 1 s", what, atEnd, t.reached);
-  if (brightens) CHECK(below == 0, "sleep at 400%%, look brightens mid-sleep: %d frames below the ramp, want none", below);
-  else CHECK(above == 0, "sleep at 400%%, look dims mid-sleep: %d frames above the ramp, want none", above);
+  const char* across = wrap ? " across the millis wrap" : "";
+  CHECK(atEnd == 0, "sleep at 400%%, look %s mid-sleep%s: shown %d on the last frame, want 0", what, across, atEnd);
+  if (!brightens) CHECK(below <= 335, "sleep at 400%%, look dims mid-sleep%s: %d frames below the ramp, want at most 335", across, below);
+  CHECK(t.reached >= 0 && t.reached <= 1000, "sleep at 400%%, look %s mid-sleep%s: shown %d at the end, reached 0 %d ms later, "
+        "want within 1 s", what, across, atEnd, t.reached);
+  if (brightens) CHECK(below == 0, "sleep at 400%%, look brightens mid-sleep%s: %d frames below the ramp, want none", across, below);
+  else CHECK(above == 0, "sleep at 400%%, look dims mid-sleep%s: %d frames above the ramp, want none", across, above);
 }
 
-// An undisturbed 1 minute sleep at 400 % on day (or on embers, where the ramp's slope is above the glide floor) follows the ramp: halfway at 30 s and never below it.
+// An undisturbed 1 minute sleep at 400 % on day or embers follows the ramp: halfway at 30 s and never below it.
 static void sleepOnRamp(bool embers = false) {
   int falls = 0;
   settleLook(embers ? 3 : 0);
@@ -393,6 +394,7 @@ int main() {
   sleepLookMoves(true);
   sleepLookMoves(false);
   sleepLookMoves(true, true);
+  sleepLookMoves(false, true);
   sleepOnRamp();
   sleepOnRamp(true);
   statusAfterSleepEnd();
