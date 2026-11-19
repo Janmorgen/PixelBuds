@@ -29,25 +29,58 @@ int main() {
   printf("heap allocations in 500 steps (%d frames): %ld\n", 500 * FRAMES_PER_STEP, allocs);
   CHECK(allocs == 0, "%ld heap allocations after warmup", allocs);
 
-  // Stress: 200 % pixels, 400 % speed and mix, every effect at full boost, a test day through every transition, and a
-  // shuffle every 500 steps. After a short warmup nothing may allocate.
-  adjustPixels = 200; adjustSpeed = 400; adjustMix = 400;
-  effectBoost = 5;
+  // Stress on the held day look, where the overrides stay in force: 200 % pixels (the most /adjust allows), then
+  // 400 %, 400 % speed and mix, every effect at full boost, and a shuffle every 500 steps. Nothing may allocate from
+  // the moment the overrides are set, as the pixel count grows.
+  for (int pct : {200, 400}) {
+    startTestHold(-1, 0, 0);
+    adjustPixels = pct; adjustSpeed = 400; adjustMix = 400;
+    effectBoost = 5;
+    counting = true;
+    allocs = 0;
+    const int stressSteps = 25000;
+    size_t maxPixels = 0;
+    for (int s = 0; s < stressSteps; s++) {
+      if (s % 500 == 250) shuffleRequested = true;
+      for (int f = 0; f < FRAMES_PER_STEP; f++) loop();
+      maxPixels = std::max(maxPixels, pixels.size());
+    }
+    counting = false;
+    printf("held day, pixels %d %%: heap allocations in %d steps: %ld (up to %zu pixels, pixels override %d %%)\n", pct,
+           stressSteps, allocs, maxPixels, adjustPixels);
+    CHECK(adjustPixels == pct, "held day: the pixels override went from %d %% to %d %%", pct, adjustPixels);
+    CHECK(maxPixels >= (size_t)(55 * pct / 200), "held day, pixels %d %%: at most %zu pixels, want at least %d", pct,
+          maxPixels, 55 * pct / 200);
+    CHECK(allocs == 0, "held day, pixels %d %%: %ld heap allocations", pct, allocs);
+  }
+
+  // A test day through every transition, the overrides put back after each phase change clears them.
+  auto applyOverrides = [] { adjustPixels = 200; adjustSpeed = 400; adjustMix = 400; };
   startTestDay();
-  for (int s = 0; s < 300; s++) for (int f = 0; f < FRAMES_PER_STEP; f++) loop();
+  applyOverrides();
   counting = true;
   allocs = 0;
-  const int stressSteps = 25000;
+  const int daySteps = 25000;
   size_t maxPixels = 0;
-  for (int s = 0; s < stressSteps; s++) {
+  int phaseChanges = 0;
+  char phase[32];
+  strncpy(phase, activePhase, sizeof(phase) - 1);
+  phase[sizeof(phase) - 1] = 0;
+  for (int s = 0; s < daySteps; s++) {
     if (s % 500 == 250) shuffleRequested = true;
-    for (int f = 0; f < FRAMES_PER_STEP; f++) loop();
+    for (int f = 0; f < FRAMES_PER_STEP; f++) {
+      loop();
+      if (strcmp(phase, activePhase) != 0) { phaseChanges++; strncpy(phase, activePhase, sizeof(phase) - 1); }
+      applyOverrides();
+    }
     maxPixels = std::max(maxPixels, pixels.size());
   }
   counting = false;
-  printf("stress: heap allocations in %d steps: %ld (up to %zu pixels, test day %s)\n", stressSteps, allocs, maxPixels,
-         testActive ? "still running" : "finished");
-  CHECK(allocs == 0, "stress: %ld heap allocations after warmup", allocs);
+  printf("test day, pixels 200 %%: heap allocations in %d steps: %ld (up to %zu pixels, %d phase changes, test day %s)\n",
+         daySteps, allocs, maxPixels, phaseChanges, testActive ? "still running" : "finished");
+  CHECK(phaseChanges >= 4, "test day: only %d phase changes", phaseChanges);
+  CHECK(maxPixels >= 55, "test day: at most %zu pixels, want at least 55", maxPixels);
+  CHECK(allocs == 0, "test day: %ld heap allocations", allocs);
   printf(failures ? "alloc: FAILED\n" : "alloc: ok\n");
   return failures != 0;
 }
