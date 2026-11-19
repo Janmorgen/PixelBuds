@@ -291,7 +291,7 @@ int main() {
   // 5. Through loop(): an evening board (30 pixels spawned), then embers through a /test hold switch, at 12 consecutive
   // seeds and switch offsets 5 frames apart. Heads that stayed put (same colour and presence) must not drop by over half
   // from the frame before. `detectable` counts checked heads that would show under half their previous brightness at the
-  // switch were the new ramp length re-read mid-ramp; at least one is required.
+  // switch were the ramp length re-read as the new look's; at least one is required.
   {
     const char* seedEnv = getenv("FADEIN_SEED");
     const int seed0 = seedEnv ? atoi(seedEnv) : 7;
@@ -301,12 +301,8 @@ int main() {
     const int rOld = rampOf(LOOK_EVENING), rNew = rampOf(LOOK_EMBERS);
     // Brightest channel the j-th write would show if the ramp length were re-read as rNew.
     auto rereadBright = [&](const pixel& p, int j) {
-      if (j + 1 >= rNew) return 0;
       int best = 0;
-      for (int c = 0; c < 3; c++) {
-        int shown = (uint8_t)(p.color[c] * p.shownPresence), start = p.rampStart[c];
-        best = max(best, (int)lroundf(start + (shown - start) * (float)(j + 1) / rNew));
-      }
+      for (int c = 0; c < 3; c++) best = max(best, contract(p.rampStart[c], (uint8_t)(p.color[c] * p.shownPresence), j, rNew));
       return best;
     };
     for (int k = 0; k < 12; k++) {
