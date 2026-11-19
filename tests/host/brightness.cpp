@@ -219,6 +219,19 @@ static void risingHeadroom() {
   printf("jump from day to golden within golden hour at 400%%: %d frames under 255, brightnessPct %d\n", under, brightnessPct);
   CHECK(under == 0, "jump to golden within golden hour at 400%%: %d frames under 255, want none", under);
   CHECK(brightnessPct == 400, "brightnessPct %d after the ramp, want 400 (no phase change)", brightnessPct);
+
+  // A slow glide (a 600 s power fade while on) still follows the rising headroom.
+  startTestHold(from, -1, 0);
+  settle(400, false, &falls);
+  setPower(true, false, 600000);
+  under = 0;
+  for (int f = 0; f <= 2000; f++) {
+    startTestHold(from + (to - from) * f / 2000.0f, -1, 0);
+    loop();
+    if (shownBrightness() < 255) under++;
+  }
+  printf("ramp to golden at 400%% during a 600 s fade: %d frames under 255\n", under);
+  CHECK(under == 0, "ramp to golden during a slow glide: %d frames under 255, want none", under);
 }
 
 // A hold switch from golden at 400 % to embers clears the override and glides the dimmer down over 3 s.

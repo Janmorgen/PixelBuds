@@ -245,14 +245,14 @@ Turns the light on and cancels power-off (including `until=morning`) and any sle
 |---|---|---|
 | `scale` | percent, 0–400 | none: with no option, returns the current override status |
 
-Percent of the current look's brightness. Above 100 makes the light brighter than the look, up to the matrix's maximum of 255. The firmware also caps the matrix at 5 V, 500 mA, and FastLED dims the whole frame to stay under it. At high settings the day and golden looks show less than asked, and so can evening when effects that add light (such as ripple) are on; embers stays under the cap at 400 %.
+Percent of the current look's brightness. Above 100 makes the light brighter than the look, up to the matrix's maximum of 255. The firmware also caps the matrix at 5 V, 500 mA, and FastLED dims the whole frame to stay under it. At high settings the day and golden looks show less than asked. Evening at 400 % is briefly held under the cap even with effects off, and more often with effects that add light (such as ripple). Embers stays under the cap at 400 %.
 
 #### `/sleep`
 | Option | Values | Default |
 |---|---|---|
 | `in` | minutes, 1–240 | required |
 
-Dims smoothly to off over `in` minutes, then stays off until wake. A phase change while sleeping does not cancel it or reset the brightness override. Cancel with `/power/on` or `/reset`.
+Dims smoothly to off over `in` minutes, then stays off until wake. Sent while the light is off, it turns it back on (about 1 s) and dims from there. A phase change while sleeping does not cancel it or reset the brightness override. Cancel with `/power/on` or `/reset`.
 
 #### `/adjust`
 Percent changes to the current look; 100 means no change. With no options, returns the current status.
