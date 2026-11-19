@@ -26,13 +26,13 @@ static int adjustMix = 100;      // percent of the look's mixing rate
 static bool paused = false;
 static bool shuffleRequested = false;
 
-static float dimmer = 1.0f;          // shown share of the look's brightness, 0-1
+static float dimmer = 1.0f;          // shown multiple of the look's brightness, 0-4
 static float dimmerRate = 0.001f;    // largest dimmer change per millisecond
 static uint32_t dimmerLastMs = 0;
 static char overridePhase[24] = "";  // phase the overrides were last checked against
 static float scheduledEffectStrength = 0;  // the look's effect strength before the /effects setting
 
-// The dimmer the overrides ask for right now.
+// The dimmer the overrides ask for right now, 0-4.
 static float dimmerTarget() {
   if (powerOff) return 0.0f;
   float level = brightnessPct / 100.0f;
@@ -132,7 +132,7 @@ float currentEffectStrength() {
 
 // FastLED brightness for this frame.
 uint8_t shownBrightness() {
-  return (uint8_t)lroundf(activeLook.brightness * dimmer);
+  return (uint8_t)min(255L, lroundf(activeLook.brightness * dimmer));
 }
 
 // "until wind-down (22:00)", or how a hold ends.

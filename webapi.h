@@ -155,7 +155,7 @@ static const char HELP_TEXT[] =
   "Overrides. They last until the phase changes (status shows when) or /reset:\n"
   "/power/off            ?fade=SEC (0-600, default 1)  ?until=morning keeps it off until wake\n"
   "/power/on             ?fade=SEC; also cancels a sleep timer\n"
-  "/brightness?scale=N   0-100 percent of the current look\n"
+  "/brightness?scale=N   0-400 percent of the current look\n"
   "/sleep?in=MIN         dim to off over 1-240 minutes, then off until wake\n"
   "/adjust               ?speed= ?pixels= ?trail= ?mix=  percent of the look (25-400; pixels 25-200)\n"
   "/colors               ?red= ?green= ?blue= ?amber=  0-100, or auto for the schedule's\n"
@@ -372,7 +372,7 @@ static void handleBrightness() {
   Check c;
   allowOnly(c, {"scale"});
   long pct = -1;
-  if (web.hasArg("scale") && !parseInt(web.arg("scale"), 0, 100, pct)) c.fail("?scale= takes a percentage, 0 to 100.");
+  if (web.hasArg("scale") && !parseInt(web.arg("scale"), 0, 400, pct)) c.fail("?scale= takes a percentage, 0 to 400.");
   if (rejected(c)) return;
   if (pct >= 0) setBrightnessPct(pct);
   sendOk(pct >= 0 ? "Brightness set." : "Brightness.");
