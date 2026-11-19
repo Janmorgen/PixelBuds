@@ -222,7 +222,7 @@ void pixel::retire() {
   this->retired = true;
   addAvailableIndex(this->xPos, this->yPos);
 }
-#define PRESENCE_FADE_FRAMES 40   // steps for a fallback fade in or out (~3 s)
+#define PRESENCE_FADE_STEPS 40    // steps for a fallback fade in or out (~3 s)
 #define ROLE_CORE     0           // present in both phases of the transition
 #define ROLE_ARRIVING 1           // joins for the next phase, brightening across the transition
 #define ROLE_LEAVING  2           // absent from the next phase, dimming across the transition
@@ -238,7 +238,7 @@ float pixel::presenceTarget() {
 // Moves the intensity one step toward its target, never faster than the fallback fade; a faded-out pixel goes dark.
 void pixel::updatePresence() {
   float target = this->fadingOut ? 0.0f : this->presenceTarget();
-  float step = 1.0f / (this->respawn ? DEATH_FADE_FRAMES : PRESENCE_FADE_FRAMES);
+  float step = 1.0f / (this->respawn ? DEATH_FADE_STEPS : PRESENCE_FADE_STEPS);
   if (this->presence < target) this->presence = min(this->presence + step, target);
   else this->presence = max(this->presence - step, target);
   if (this->fadingOut && this->presence <= 0.0f) this->color = CRGB(0, 0, 0);

@@ -10,7 +10,7 @@
 #define RULE_LIFE_MIN_DEFAULT 30
 #define RULE_LIFE_MAX_DEFAULT 100
 #define RULE_LIFE_LIMIT 2000
-#define DEATH_FADE_FRAMES 12   // steps a pixel takes to fade out when its life ends with expire=fade
+#define DEATH_FADE_STEPS  12   // steps a pixel takes to fade out when its life ends with expire=fade
 
 static const char* const mixNames[] = {"pool", "pair"};
 static const char* const expireNames[] = {"snap", "fade"};

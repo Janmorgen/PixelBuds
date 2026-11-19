@@ -39,3 +39,8 @@ if ! grep -q 'moveTicks' "$out/sketch/PixelBuds.ino"; then
     echo "prep.sh: shim did not apply" >&2; exit 1
   fi
 fi
+
+# Shim for a sketch from before the step-counter rename: the island step counter was called islandFrame.
+if [ -f "$out/sketch/islandfx.h" ] && grep -qw 'islandFrame' "$out/sketch/islandfx.h"; then
+  sed -i -E 's/\bislandFrame\b/islandStep/g' "$out/sketch/islandfx.h"
+fi

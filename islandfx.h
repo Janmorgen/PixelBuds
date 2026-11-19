@@ -8,13 +8,13 @@
 // Island tracking and the effects set at /effects. Included by PixelBuds.ino after the pixel class.
 
 #define MAX_RIPPLES   2
-#define SEED_FRAMES   40     // steps a seed waits for a pixel to respawn into it
+#define SEED_STEPS    40     // steps a seed waits for a pixel to respawn into it
 #define SEED_REACH    2      // cells from the island's centre a seed may land
 #define RIPPLE_SPEED  0.5f   // ring growth, cells per step
 #define RIPPLE_LEVEL  0.25f   // ring brightness at its start, relative to the island's colour
 #define RIPPLE_MAX    12.0f  // largest ring radius, cells
 #define RIPPLE_MIN_PEAK   3  // only islands that reached this many pixels ripple
-#define RIPPLE_MIN_FRAMES 24 // and lasted this many steps (about 2 s)
+#define RIPPLE_MIN_STEPS  24 // and lasted this many steps (about 2 s)
 #define PIXELS_RESERVED   256 // most pixels there can be: one per cell
 #define ISLANDS_RESERVED  256 // room kept for islands: last step's and this step's, two or more cells each
 #define SEEDS_RESERVED    256 // room kept for waiting seeds
@@ -44,14 +44,14 @@ struct Seed {
   int x, y;
   CRGB colour;
   int spawnIndex;
-  int framesLeft;
+  int stepsLeft;
 };
 
 static std::vector<Island> islands;
 static std::vector<Ripple> ripples;
 static std::vector<Seed> seeds;
 static int nextIslandId = 1;
-static uint32_t islandFrame = 0;
+static uint32_t islandStep = 0;
 
 // Effect strength in force: the look's, or the fixed setting.
 static float fxStrength() {
@@ -144,11 +144,11 @@ static void onIslandEnd(const Island& is) {
     CRGB colour = pure(is.colour);
     if (!colour.r && !colour.g && !colour.b) colour = paletteColors[is.spawnIndex];
     for (int i = 0; i < count; i++) {
-      seeds.push_back({(int)lroundf(is.cx), (int)lroundf(is.cy), colour, is.spawnIndex, SEED_FRAMES});
+      seeds.push_back({(int)lroundf(is.cx), (int)lroundf(is.cy), colour, is.spawnIndex, SEED_STEPS});
     }
   }
 
-  if ((effectIsland & ISLAND_RIPPLE) && is.peak >= RIPPLE_MIN_PEAK && islandFrame - is.born >= RIPPLE_MIN_FRAMES) {
+  if ((effectIsland & ISLAND_RIPPLE) && is.peak >= RIPPLE_MIN_PEAK && islandStep - is.born >= RIPPLE_MIN_STEPS) {
     if (ripples.size() >= MAX_RIPPLES) ripples.erase(ripples.begin());
     float radius = min(RIPPLE_MAX, 2.0f + 1.5f * effectBoost * s * sqrtf((float)is.peak));
     CRGB colour = pure(is.colour);
@@ -225,9 +225,9 @@ void drawRipples(float fade) {
 // Groups the lit pixels into islands, carries each island's identity over from the last step
 // and runs the island effects for any that broke up without merging into another.
 void trackIslands() {
-  islandFrame++;
+  islandStep++;
   for (size_t i = 0; i < seeds.size();) {
-    if (--seeds[i].framesLeft <= 0) seeds.erase(seeds.begin() + i);
+    if (--seeds[i].stepsLeft <= 0) seeds.erase(seeds.begin() + i);
     else i++;
   }
 
@@ -300,7 +300,7 @@ void trackIslands() {
     Island* is = nullptr;
     for (Island& cand : islands) if (cand.id == bestId && bestId != 0) is = &cand;
     if (!is) {
-      islands.push_back({nextIslandId++, islandFrame, 0, 0, 0, 0, CRGB(0, 0, 0), 0, false});
+      islands.push_back({nextIslandId++, islandStep, 0, 0, 0, 0, CRGB(0, 0, 0), 0, false});
       is = &islands.back();
     }
     is->seen = true;

@@ -23,7 +23,7 @@ static long created0 = 0;
 
 #ifdef NEWCODE
 void simIslandEnd(const Island& is) {
-  if (stepsShown >= warmup) endsLog.push_back({islandFrame - is.born, is.peak});
+  if (stepsShown >= warmup) endsLog.push_back({islandStep - is.born, is.peak});
 }
 #endif
 
