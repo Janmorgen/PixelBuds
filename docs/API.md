@@ -87,7 +87,7 @@ Success (`200`):
 Failure (`400`, `404`, `409`):
 
 ```json
-{ "ok": false, "error": "?scale= takes a percentage, 0 to 100." }
+{ "ok": false, "error": "?scale= takes a percentage, 0 to 400." }
 ```
 
 | Field | Type | Meaning |
@@ -394,4 +394,4 @@ These limit what a client can do today.
 - **No CORS headers.** A web page served from another origin can't read responses (native apps and `curl` are unaffected). Adding `Access-Control-Allow-Origin: *` to every response would fix it.
 - **No discovery.** The board has no stable name on the network; reserve its IP.
 - **State-changing GETs.** Link previews or browser prefetching of a command URL will run it.
-- **A slow request freezes the light.** Requests are read inside the animation loop, and the server waits up to 5 s for a request that arrives slowly or in pieces. Send each request in one go.
+- **A slow request freezes the light.** Requests are read inside the animation loop, and the server waits up to 5 s for each piece of a request that arrives slowly or in pieces, so a client that trickles data can hold it longer. Send each request in one go.
