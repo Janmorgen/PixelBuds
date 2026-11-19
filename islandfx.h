@@ -188,8 +188,13 @@ void plantSeed(pixel& p) {
   }
 }
 
-// Adds the expanding rings to the matrix; pixels drawn afterwards cover them.
-void drawRipples() {
+// Adds the expanding rings to the matrix and its 8.8 trail, and grows them by one frame; pixels drawn afterwards
+// cover them. `fade` is the board's fade per step: each frame adds the share that keeps a ring as bright as one
+// drawn once per step.
+void drawRipples(float fade) {
+  float keepStep = max(0.0f, 1.0f - fade / 256.0f);
+  float keepFrame = powf(keepStep, 1.0f / FRAMES_PER_STEP);
+  float perFrame = keepStep < 0.9999f ? (1.0f - keepFrame) / (1.0f - keepStep) : 1.0f / FRAMES_PER_STEP;
   for (size_t i = 0; i < ripples.size();) {
     Ripple& rp = ripples[i];
     float remaining = 1.0f - rp.r / rp.radius;
@@ -201,11 +206,18 @@ void drawRipples() {
       for (int y = 0; y < 8; y++) {
         float w = 1.0f - fabsf(hypotf(x - rp.cx, y - rp.cy) - rp.r);
         if (w <= 0.0f) continue;
-        float k = w * remaining * rp.level;
-        LEDs[getIndex(x, y)] += CRGB(rp.colour.r * k, rp.colour.g * k, rp.colour.b * k);
+        float k = w * remaining * rp.level * perFrame * 256.0f;
+        int led = getIndex(x, y);
+        for (int c = 0; c < 3; c++) {
+          uint32_t t = trail[led][c];
+          if ((t >> 8) != LEDs[led][c]) t = LEDs[led][c] << 8;
+          t = min(0xFFFFu, t + (uint32_t)(rp.colour[c] * k + 0.5f));
+          trail[led][c] = t;
+          LEDs[led][c] = t >> 8;
+        }
       }
     }
-    rp.r += RIPPLE_SPEED;
+    rp.r += RIPPLE_SPEED / FRAMES_PER_STEP;
     i++;
   }
 }

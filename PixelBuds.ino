@@ -547,7 +547,7 @@ void loop() {
   int ramp = max(1, (int)lroundf(moveInterval) - FRAMES_PER_STEP + 1);
   fadeBoard(look.fade, step);
   FastLED.setBrightness(shownBrightness());
-  if (step && !paused) drawRipples();
+  if (!paused) drawRipples(look.fade);
 
   static std::vector<pixel*> neighbors;
   for (size_t i = 0; i < pixels.size(); i++) {
