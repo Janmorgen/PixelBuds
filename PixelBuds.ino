@@ -413,7 +413,7 @@ void pixel::computeCycle(std::vector<pixel*> & neighbors) {
   }
 }
 // Writes the pixel's colour at its current intensity. After a move or spawn it fades in evenly over R frames, where R is
-// rampFrames as passed on the first write (j = 0) and kept for the whole ramp: on the j-th write since then the cell
+// rampFrames as passed on the first write (j = 0), capped at 255, and kept for the whole ramp: on the j-th write since then the cell
 // shows start + (shown - start) * (j + 1) / R per channel, rounded to nearest, where start is the cell's colour at that
 // first write, before this pixel writes to it; from j + 1 >= R it shows the colour as is.
 void pixel::writePixel(int rampFrames) {
