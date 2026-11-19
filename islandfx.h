@@ -202,15 +202,18 @@ void drawRipples(float fade) {
       ripples.erase(ripples.begin() + i);
       continue;
     }
+    float outer = rp.r + 1.01f, inner = rp.r - 1.01f;
+    float outer2 = outer * outer, inner2 = rp.r > 1.0f ? inner * inner : 0.0f;   // cells outside this band get no light
     for (int x = 0; x < 32; x++) {
       for (int y = 0; y < 8; y++) {
-        float w = 1.0f - fabsf(hypotf(x - rp.cx, y - rp.cy) - rp.r);
+        float dx = x - rp.cx, dy = y - rp.cy, d2 = dx * dx + dy * dy;
+        if (d2 > outer2 || (inner2 > 0.0f && d2 < inner2)) continue;
+        float w = 1.0f - fabsf(hypotf(dx, dy) - rp.r);
         if (w <= 0.0f) continue;
         float k = w * remaining * rp.level * perFrame * 256.0f;
         int led = getIndex(x, y);
         for (int c = 0; c < 3; c++) {
           uint32_t t = trail[led][c];
-          if ((t >> 8) != LEDs[led][c]) t = LEDs[led][c] << 8;
           t = min((uint32_t)0xFFFF, t + (uint32_t)(rp.colour[c] * k + 0.5f));
           trail[led][c] = t;
           LEDs[led][c] = t >> 8;

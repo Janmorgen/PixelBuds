@@ -102,6 +102,40 @@ static void presence() {
   CHECK(presenceBad == 0, "%d pixels had shownPresence != presence on a step's last frame", presenceBad);
 }
 
+// Where a step's change in presence was drawn: each pixel moves an equal share per frame, strictly between its old
+// and new value on frames 0-2, without overshoot.
+static std::vector<float> glideFrom;
+static int glideChecked = 0, glideBad = 0;
+static void checkGlide() {
+  int frame = (frameInStep + FRAMES_PER_STEP - 1) % FRAMES_PER_STEP;   // the frame just drawn
+  if (frame == FRAMES_PER_STEP - 1) {
+    glideFrom.resize(pixels.size());
+    for (size_t i = 0; i < pixels.size(); i++) glideFrom[i] = pixels[i].shownPresence;
+    return;
+  }
+  if (glideFrom.size() != pixels.size()) return;
+  for (size_t i = 0; i < pixels.size(); i++) {
+    float from = glideFrom[i], to = pixels[i].presence, now = pixels[i].shownPresence;
+    if (fabsf(to - from) < 1e-3f) continue;
+    glideChecked++;
+    float share = (to - from) / FRAMES_PER_STEP;
+    bool between = now > fminf(from, to) && now < fmaxf(from, to);
+    if (!between || fabsf(now - (from + share * (frame + 1))) > 1e-5f) glideBad++;
+  }
+}
+static void glide() {
+  startTestHold(1050, -1, 0);
+  steps(100);
+  while (frameInStep != 0) loop();
+  for (pixel& p : pixels) p.fadingOut = true;   // each step now lowers every pixel's presence by 1 / PRESENCE_FADE_STEPS
+  showHook = checkGlide;
+  steps(25);
+  showHook = nullptr;
+  printf("glide: %d of %d changed-presence checks off\n", glideBad, glideChecked);
+  CHECK(glideChecked > 100, "only %d presence changes checked", glideChecked);
+  CHECK(glideBad == 0, "%d presence changes were not drawn as equal shares per frame", glideBad);
+}
+
 // After a shuffle the board shows no trail of the old layout.
 static void shuffle() {
   startTestHold(-1, 0, 0);
@@ -123,6 +157,7 @@ int main() {
   tickGaps();
   pause();
   presence();
+  glide();
   shuffle();
   printf(failures ? "clocks: %d failure(s)\n" : "clocks: ok\n", failures);
   return failures != 0;

@@ -84,6 +84,27 @@ int main() {
             cells[k][0], cells[k][1], t[peakAt], old.mean, old.tip);
     }
   }
+  // Paused: a ring stops growing and lights no cell.
+  adjustTrail = 100;
+  while (frameInStep != 1) loop();
+  ripples.clear();
+  ripples.push_back({CX, CY, 0.0f, RADIUS, RIPPLE_LEVEL, CRGB(255, 0, 0)});
+  for (int i = 0; i < 8; i++) loop();
+  CHECK(ripples.size() == 1 && ripples[0].r > 0.0f, "no growing ring to pause");
+  float r0 = ripples[0].r;
+  paused = true;
+  int rises = 0;
+  CRGB prev[RGB_LED_NUM];
+  for (int f = 0; f < 40; f++) {
+    for (int i = 0; i < RGB_LED_NUM; i++) prev[i] = LEDs[i];
+    loop();
+    for (int i = 0; i < RGB_LED_NUM; i++)
+      for (int c = 0; c < 3; c++) if (LEDs[i][c] > prev[i][c]) rises++;
+  }
+  paused = false;
+  printf("pause: ring r %.3f before, %.3f after 40 paused frames, %d LED rises\n", r0, ripples.empty() ? -1.0f : ripples[0].r, rises);
+  CHECK(ripples.size() == 1 && ripples[0].r == r0, "the ring grew while paused (r %.3f -> %.3f)", r0, ripples.empty() ? -1.0f : ripples[0].r);
+  CHECK(rises == 0, "%d LED values rose while paused", rises);
   printf(failures ? "ripple: %d failure(s)\n" : "ripple: ok\n", failures);
   return failures != 0;
 }
