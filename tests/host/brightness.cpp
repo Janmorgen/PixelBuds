@@ -285,11 +285,15 @@ static float rampShown() { return activeLook.brightness * dimmerTarget(); }
 // it from near golden (look 70) to near day (look 100), so the headroom falls below the dimmer's ramp; otherwise the
 // opposite. The shown brightness is 0 within 1 s of the end; when the look brightens it never falls below the ramp,
 // and when the look dims it never rises above it.
-static void sleepLookMoves(bool brightens) {
+static void sleepLookMoves(bool brightens, bool wrap = false) {
   int falls = 0;
   float dayEnd = schedule[3].minute + 0.01f, goldenEnd = schedule[4].minute - 0.01f;
   holdMinute(brightens ? goldenEnd : dayEnd);
   settle(400, false, &falls);
+  if (wrap) {   // the sleep starts 10 s before millis() wraps at 2^32 ms
+    simMicros = (4294967296ULL - 10000) * 1000;
+    frameClockStarted = false; showStarted = false; dimmerLastMs = millis();
+  }
   float before = activeLook.brightness;
   startSleep(1);
   bool moved = false;
@@ -308,16 +312,18 @@ static void sleepLookMoves(bool brightens) {
   const char* what = brightens ? "brightens" : "dims";
   printf("sleep 1 min at 400%%, look %.0f -> %.0f at 18 s (%s): shown %d at the end, 0 after %d ms more, %d frames above "
          "the ramp, %d below\n", before, activeLook.brightness, activePhase, atEnd, t.reached, above, below);
+  CHECK(atEnd <= 1, "sleep at 400%%, look %s mid-sleep%s: shown %d on the last frame, want 0", what, wrap ? " across the millis wrap" : "", atEnd);
+  if (!brightens && !wrap) CHECK(below <= 335, "sleep at 400%%, look dims mid-sleep: %d frames below the ramp, want at most 335", below);
   CHECK(t.reached >= 0 && t.reached <= 1000, "sleep at 400%%, look %s mid-sleep: shown %d at the end, reached 0 %d ms later, "
         "want within 1 s", what, atEnd, t.reached);
   if (brightens) CHECK(below == 0, "sleep at 400%%, look brightens mid-sleep: %d frames below the ramp, want none", below);
   else CHECK(above == 0, "sleep at 400%%, look dims mid-sleep: %d frames above the ramp, want none", above);
 }
 
-// An undisturbed 1 minute sleep at 400 % on day follows the ramp: halfway at 30 s and never below it.
-static void sleepOnRamp() {
+// An undisturbed 1 minute sleep at 400 % on day (or on embers, where the ramp's slope is above the glide floor) follows the ramp: halfway at 30 s and never below it.
+static void sleepOnRamp(bool embers = false) {
   int falls = 0;
-  settleLook(0);
+  settleLook(embers ? 3 : 0);
   settle(400, false, &falls);
   float half = activeLook.brightness * dimmerLevel() / 2;
   startSleep(1);
@@ -326,11 +332,24 @@ static void sleepOnRamp() {
     loop();
     if (shownBrightness() < lroundf(rampShown()) - 1) below++;
   }
-  printf("sleep 1 min at 400%% on day: shown %d at 30 s, ramp halfway %.1f, %d frames below the ramp\n", shownBrightness(),
-         half, below);
-  CHECK(fabsf(shownBrightness() - half) <= 1.0f, "sleep at 400%%: shown %d at 30 s, want %.1f (the ramp's halfway)",
-        shownBrightness(), half);
-  CHECK(below == 0, "sleep at 400%%: %d frames below the ramp in the first 30 s, want none", below);
+  printf("sleep 1 min at 400%% on %s: shown %d at 30 s, ramp halfway %.1f, %d frames below the ramp\n", embers ? "embers" : "day",
+         shownBrightness(), half, below);
+  CHECK(fabsf(shownBrightness() - half) <= 1.0f, "sleep at 400%% on %s: shown %d at 30 s, want %.1f (the ramp's halfway)",
+        embers ? "embers" : "day", shownBrightness(), half);
+  CHECK(below == 0, "sleep at 400%% on %s: %d frames below the ramp in the first 30 s, want none", embers ? "embers" : "day", below);
+}
+
+// A status request served after a sleep ends but before the next frame shows 0 seconds left.
+static void statusAfterSleepEnd() {
+  resetOverrides();
+  setPower(true, false, 0);
+  startSleep(1);
+  simMicros += 160000ULL * 1000;
+  String json = overridesJson();
+  printf("status after the sleep's end: %s\n", json.c_str());
+  CHECK(strstr(json.c_str(), "\"sleepSecondsLeft\":0,"), "status after the sleep's end: sleepSecondsLeft not 0: %s", json.c_str());
+  String text = overridesStatus();
+  CHECK(strstr(text.c_str(), "off in 0 min"), "status text after the sleep's end: want 'off in 0 min': %s", text.c_str());
 }
 
 // In wake the look brightens from embers to day, so the headroom falls below a 400 % dimmer; a power-off fade then
@@ -373,7 +392,10 @@ int main() {
   fallingHeadroom();
   sleepLookMoves(true);
   sleepLookMoves(false);
+  sleepLookMoves(true, true);
   sleepOnRamp();
+  sleepOnRamp(true);
+  statusAfterSleepEnd();
   printf(failures ? "brightness: %d failure(s)\n" : "brightness: ok\n", failures);
   return failures != 0;
 }

@@ -187,7 +187,8 @@ static bool anyPhaseOverride() {
 String overridesStatus() {
   String s = "power:       ";
   if (sleepActive) {
-    uint32_t left = sleepLengthMs - (millis() - sleepStartMs);
+    uint32_t elapsed = millis() - sleepStartMs;
+    uint32_t left = elapsed < sleepLengthMs ? sleepLengthMs - elapsed : 0;
     s += "sleeping, off in " + String((left + 59999) / 60000) + " min, then off " + morningText();
   } else if (powerOff) {
     s += "off " + (powerUntilMorning ? morningText() : untilText());
@@ -224,7 +225,8 @@ String overridesJson() {
     colours += String(c ? "," : "") + "\"" + paletteNames[c] + "\":" +
                (colourOverride[c] >= 0 ? String(lroundf(colourOverride[c] * 100)) : String("null"));
   }
-  String sleep = sleepActive ? String((sleepLengthMs - (millis() - sleepStartMs)) / 1000) : String("null");
+  uint32_t sleepElapsed = millis() - sleepStartMs;
+  String sleep = sleepActive ? String((sleepElapsed < sleepLengthMs ? sleepLengthMs - sleepElapsed : 0) / 1000) : String("null");
   return String("\"power\":{\"on\":") + (powerOff ? "false" : "true") +
          ",\"untilMorning\":" + (powerUntilMorning ? "true" : "false") +
          ",\"sleepSecondsLeft\":" + sleep + ",\"dimmer\":" + String(dimmer, 2) + "}," +
