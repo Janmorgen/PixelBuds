@@ -29,7 +29,7 @@ Every route the firmware registers. Options go in the query string; a route list
 | [`/help`](#status) | none | A plain-text route list |
 | [`/power/off`](#poweroff) | `fade` 0–600 s · `until` `phase`\|`morning` | Turns the light off |
 | [`/power/on`](#poweron) | `fade` 0–600 s | Turns the light on; cancels a sleep timer |
-| [`/brightness`](#brightness) | `scale` 0–100 | Percent of the look's brightness |
+| [`/brightness`](#brightness) | `scale` 0–400 | Percent of the look's brightness |
 | [`/sleep`](#sleep) | `in` 1–240 min, required | Dims to off over `in` minutes, then off until wake |
 | [`/adjust`](#adjust) | `speed`, `trail`, `mix` 25–400 · `pixels` 25–200 | Percent changes to the current look |
 | [`/colors`](#colors) | `red`, `green`, `blue`, `amber` 0–100 or `auto` | How often each colour spawns |
@@ -116,7 +116,7 @@ The light has three layers. A remote control should present them separately.
 - During a hold (`/test?hold=`) the phase never changes, so overrides last until the hold ends.
 - Changing `/schedule` can move the current time into a different phase, which clears overrides.
 
-**Brightness shown** = `look.brightness` × `power.dimmer`. The dimmer combines power, the brightness override and the sleep ramp, and glides to new values: about 1 s for brightness changes, 3 s when overrides clear, and the requested fade for power.
+**Brightness shown** = `look.brightness` × `power.dimmer`, at most 255. The dimmer combines power, the brightness override and the sleep ramp, and glides to new values: about 1 s for brightness changes, 3 s when overrides clear, and the requested fade for power.
 
 ## The status object
 
@@ -188,8 +188,8 @@ Returned bare by `/status.json` and as `status` in every success envelope. Examp
 | `power.on` | bool | `false` while powered off (including after a sleep timer finishes) |
 | `power.untilMorning` | bool | The power-off lasts until wake rather than the next phase |
 | `power.sleepSecondsLeft` | int \| null | Seconds until a running sleep timer reaches off |
-| `power.dimmer` | number 0–1 | The share of the look's brightness being shown right now. It glides, so a command's reply shows where the glide starts; `overrides.brightness` and `power.on` show the target |
-| `overrides.brightness` | int 0–100 | Brightness override, percent |
+| `power.dimmer` | number 0–4 | The share of the look's brightness being shown right now; above 1 is brighter than the look. It glides, so a command's reply shows where the glide starts; `overrides.brightness` and `power.on` show the target |
+| `overrides.brightness` | int 0–400 | Brightness override, percent; 100 means no change |
 | `overrides.speed`, `.pixels`, `.trail`, `.mix` | int | `/adjust` percentages; 100 means no change |
 | `overrides.colors.<colour>` | int 0–100 \| null | Colour override; `null` means the schedule decides |
 | `overrides.paused` | bool | Motion is frozen |
@@ -243,9 +243,9 @@ Turns the light on and cancels power-off (including `until=morning`) and any sle
 #### `/brightness`
 | Option | Values | Default |
 |---|---|---|
-| `scale` | percent, 0–100 | none: with no option, returns the current override status |
+| `scale` | percent, 0–400 | none: with no option, returns the current override status |
 
-Percent of the current look's brightness; it cannot exceed the schedule.
+Percent of the current look's brightness. Above 100 makes the light brighter than the look, up to the matrix's maximum of 255. The firmware also caps the matrix at 5 V, 500 mA, and FastLED dims the whole frame to stay under it, so a bright day look can't reach 255.
 
 #### `/sleep`
 | Option | Values | Default |
